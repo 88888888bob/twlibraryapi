@@ -1,26 +1,47 @@
-name = "tw-api" # 给合并后的项目起一个新名字
-main = "src/index.js"
-compatibility_date = "2023-10-26" # 可以使用最新的兼容日期
+name = "tw-api"
+# main = "src/index.js" # Wrangler 2.x 会自动从构建产物中确定入口点，如果 [build] 部分配置正确
+                        # 如果你的 esbuild 输出到 dist/worker.js, Wrangler 会用它。
+                        # 如果仍有问题，可以明确指定为构建后的文件，如 main = "./dist/worker.js"
+compatibility_date = "2024-03-01" # 建议使用一个较新的日期，但要确保与你的代码兼容
 
 [[d1_databases]]
-binding = "DB" # 绑定 D1 数据库的名称
-database_name = "library" # 你的 D1 数据库名称 (两个项目使用同一个)
-database_id = "13cdef99-aa9e-4f12-9e7b-14ace0d5c92d"  # 你的 D1 数据库 ID (两个项目使用同一个)
+binding = "DB"
+database_name = "library"
+database_id = "13cdef99-aa9e-4f12-9e7b-14ace0d5c92d" # 确保这是你生产环境的 DB ID
 
-# 从项目 2 中引入构建配置
+# 构建配置
 [build]
-command = "npm install && npm run build"
-watch_dir = ["src"]
+command = "npm install && npm run build" # 这个命令会在部署时执行
+watch_dir = "src"                        # `wrangler dev` 时监视的目录
 
-[build.upload]
-format = "modules"
+# [build.upload] # Wrangler 2.x 通常不需要显式配置 format = "modules" 当使用 [build] command 时
+# format = "modules"
 
-[scripts]
-build = "esbuild src/index.js --bundle --outfile=dist/worker.js --platform=browser --format=esm"
-
-# [vars] # PASSWORD_SALT 来自项目 2，但 bcryptjs 会自动处理盐，所以除非你有特殊用途，否则可以不设置
-# PASSWORD_SALT = "your_strong_random_salt_here_if_needed_elsewhere"
-
+# observability (可选，但推荐)
 [observability]
-enabled = true
-head_sampling_rate = 1
+# enabled = true # 默认就是 true
+# sampling_rate = 1.0 # 以前的配置，现在用下面的
+# head_sampling_rate = 1.0 # 记录所有请求的头部信息
+# tail_sampling_rules = [ # 示例：记录所有失败请求的完整信息
+#   { status_code_ranges = ["500-599"], sampling_rate = 1.0 }
+# ]
+# 更多配置见：https://developers.cloudflare.com/workers/observability/tail-workers/
+
+# 如果你的 Worker 需要访问环境变量 (Secrets)，在这里定义
+# [vars]
+# MY_SECRET_KEY = "this_is_a_placeholder_for_a_secret_value_set_in_dashboard_or_cli"
+
+# 如果你需要为 `wrangler dev` 指定不同的本地数据库 (预览数据库)
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "library-preview"
+# database_id = "your_preview_database_id_here"
+# preview_database_id = "your_preview_database_id_here" # 确保与上面 database_id 一致 (用于本地预览)
+
+# 如果有 migrations，配置它们
+# [[migrations]]
+# tag = "v1" # A unique tag for this migration
+# new_classes = ["DurableObjectExample"] # Durable Objects to be migrated
+
+# 如果你想覆盖入口点 (通常不需要，如果 build 命令输出单个文件到 dist)
+# main = "./dist/worker.js"
