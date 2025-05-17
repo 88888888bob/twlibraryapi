@@ -2,8 +2,9 @@
 import * as bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { serialize } from 'cookie';
-import DOMPurify from 'dompurify';
-import { JSDOM } from 'jsdom'; // 用于在非浏览器环境中为 DOMPurify 提供一个 DOM 实现
+//import DOMPurify from 'dompurify';
+//import { JSDOM } from 'jsdom'; // 用于在非浏览器环境中为 DOMPurify 提供一个 DOM 实现
+import DOMPurify from 'isomorphic-dompurify'; // <--- 修改这里：使用 isomorphic-dompurify
 
 // --- 常量 ---
 const COOKIE_NAME = 'library_session'; // 统一的 Cookie 名称
@@ -1160,70 +1161,49 @@ async function handleAdminUpdateSiteSetting(request, env, settingKey) {
 
     try {
         const requestBody = await request.json();
-        let value = requestBody.value; // 从请求体中获取 value
-        const description = requestBody.description; // 从请求体中获取 description
+        let value = requestBody.value;
+        const description = requestBody.description;
 
-        if (value === undefined) { // value 可以是空字符串，但不能是 undefined
+        if (value === undefined) {
             return createErrorResponse("Setting 'value' is required in the request body.", 400);
         }
 
-        // --- HTML Sanitization for specific keys ---
-        // 定义哪些 setting_key 的值是 HTML，需要清理
         const htmlSettingKeys = ['announcement_bar_html', 'news_content_html', 'comment_html']; // 扩展这个列表
 
         if (htmlSettingKeys.includes(settingKey)) {
             if (typeof value === 'string' && value.trim() !== '') {
-                const window = new JSDOM('').window; // 创建一个 JSDOM window 对象
-                const purify = DOMPurify(window);   // 初始化 DOMPurify
-
-                // 配置 DOMPurify
-                // 这是一个相对宽松的配置，允许基本格式化和链接
-                // 你应该根据你的具体需求调整 ALLOWED_TAGS 和 ALLOWED_ATTR
+                // 使用 isomorphic-dompurify 进行清理
+                // 它会在服务器端自动处理 JSDOM 的创建（如果需要）
                 const sanitizeConfig = {
-                    USE_PROFILES: { html: true }, // 启用 HTML 配置文件
-                    // 允许的标签 (示例，根据需要调整)
+                    USE_PROFILES: { html: true },
                     ALLOWED_TAGS: [
                         'p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'span',
                         'a', 'ul', 'ol', 'li', 
                         'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
                         'blockquote', 'pre', 'code',
-                        // 移除 'div' 如果不希望用户创建复杂布局，Quill 的颜色和背景色常用 span
+                        // 根据 Quill 生成的 HTML 和你的安全需求仔细配置
                     ],
-                    // 允许的属性 (示例，根据需要调整)
                     ALLOWED_ATTR: [
                         'href', 'target', // for <a> tags
-                        'style',          // for inline styles like color, background-color (Quill uses this)
+                        'style',          // for inline styles like color, background-color
                         'class',          // if you use classes for styling
-                        // 移除 'color', 'size', 'face' 等已废弃的属性，鼓励用 CSS
+                        // 根据 Quill 生成的 HTML 和你的安全需求仔细配置
                     ],
-                    // 确保禁止危险标签和属性 (DOMPurify 默认会做很多，但明确指出没坏处)
-                    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'style', 'form', 'input', 'textarea', 'button'],
-                    FORBID_ATTR: [
-                        'onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 
-                        'styleaction', 'formaction', 'autofocus' // 更多事件处理器和潜在危险属性
-                    ],
-                    ALLOW_DATA_ATTR: false, // 通常禁止 data-* 属性，除非你有特定用途
+                    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'style', /* 'form', 'input', 'button' 等 */],
+                    FORBID_ATTR: ['onerror', 'onload', 'onclick', /* 更多事件处理器 */],
+                    ALLOW_DATA_ATTR: false,
                 };
                 
-                // 如果是公告栏，可能希望更严格的限制，不允许复杂的 style
-                if (settingKey === 'announcement_bar_html') {
-                    // 可以为公告栏定义一个更严格的配置，例如不允许背景色，或只允许特定 style 属性
-                    // sanitizeConfig.ALLOWED_ATTR = ['href', 'target', 'style']; // 更严格
-                    // 或者进一步限制 style 属性内容
-                }
-
-                value = purify.sanitize(value, sanitizeConfig);
+                console.log(`Sanitizing HTML for key: ${settingKey} before saving.`);
+                value = DOMPurify.sanitize(value, sanitizeConfig);
+                console.log(`Sanitized HTML for key: ${settingKey} successfully.`);
 
             } else if (typeof value === 'string' && value.trim() === '') {
-                value = ''; // 保持空字符串
+                value = '';
             }
-            // 如果 value 不是字符串，DOMPurify 会处理（通常返回空字符串或基于输入类型），
-            // 但在这里，如果它不是字符串，可能表示请求数据有问题。
-            // 不过 'value === undefined' 检查已经处理了主要问题。
         }
-        // --- End of HTML Sanitization ---
 
-        const currentTime = new Date().toISOString().replace('T', ' ').split('.')[0]; // YYYY-MM-DD HH:MM:SS
+        const currentTime = new Date().toISOString().replace('T', ' ').split('.')[0];
 
         const stmt = env.DB.prepare(
             `INSERT INTO site_settings (setting_key, setting_value, description, last_updated) 
@@ -1234,6 +1214,7 @@ async function handleAdminUpdateSiteSetting(request, env, settingKey) {
                 last_updated = excluded.last_updated`
         );
         
+        console.log(`Attempting to save setting: ${settingKey} with value (first 50 chars): ${String(value).substring(0,50)}`);
         const { success, meta } = await stmt.bind(
             settingKey, 
             value, // 使用清理后的 value
@@ -1242,6 +1223,7 @@ async function handleAdminUpdateSiteSetting(request, env, settingKey) {
         ).run();
 
         if (success) {
+            console.log(`Setting '${settingKey}' saved successfully to D1.`);
             const { results: updatedSetting } = await env.DB.prepare(
                 "SELECT setting_key, setting_value, description, last_updated FROM site_settings WHERE setting_key = ? LIMIT 1"
             ).bind(settingKey).first();
@@ -1254,11 +1236,11 @@ async function handleAdminUpdateSiteSetting(request, env, settingKey) {
                 status: 200, headers: { 'Content-Type': 'application/json' },
             });
         } else {
-            console.error(`D1 UPSERT failed for setting '${settingKey}':`, meta); // Log D1 meta for debugging
+            console.error(`D1 UPSERT failed for setting '${settingKey}':`, meta);
             return createErrorResponse(`Failed to update setting '${settingKey}'. D1 operation did not succeed.`, 500);
         }
     } catch (error) {
-        if (error instanceof SyntaxError && error.message.includes("JSON")) { //捕获 JSON 解析错误
+        if (error instanceof SyntaxError && error.message.includes("JSON")) {
              console.error(`Update Site Setting (key: ${settingKey}) API Error - Invalid JSON body:`, error);
              return createErrorResponse("Invalid request body: Malformed JSON.", 400);
         }
