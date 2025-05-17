@@ -1092,6 +1092,120 @@ async function handleAdminGetStats(request, env) {
     }
 }
 
+// --- 新增：网站设置 API ---
+
+// GET /api/settings/:setting_key - 获取单个网站设置 (公开)
+async function handleGetSiteSetting(request, env, settingKey) {
+    if (!settingKey) {
+        return createErrorResponse("Setting key is required in the path.", 400);
+    }
+    try {
+        const { results } = await env.DB.prepare(
+            "SELECT setting_value, last_updated FROM site_settings WHERE setting_key = ? LIMIT 1"
+        ).bind(settingKey).all();
+
+        if (!results || results.length === 0) {
+            return createErrorResponse(`Setting with key '${settingKey}' not found.`, 404);
+        }
+        // 返回设置值和最后更新时间，前端可以利用 last_updated 进行缓存判断
+        return new Response(JSON.stringify({
+            success: true,
+            key: settingKey,
+            value: results[0].setting_value,
+            last_updated: results[0].last_updated
+        }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    } catch (error) {
+        console.error(`Get Site Setting (key: ${settingKey}) API Error:`, error);
+        return createErrorResponse("Internal Server Error: " + error.message, 500);
+    }
+}
+
+// GET /api/admin/settings - 获取所有网站设置 (管理员)
+async function handleAdminGetAllSiteSettings(request, env) {
+    const adminVerification = await verifyAdmin(request, env);
+    if (!adminVerification.authorized) {
+        return createErrorResponse(adminVerification.error, adminVerification.error.startsWith('Unauthorized') ? 401 : 403);
+    }
+    try {
+        const { results } = await env.DB.prepare(
+            "SELECT setting_key, setting_value, description, last_updated FROM site_settings ORDER BY setting_key ASC"
+        ).all();
+        
+        return new Response(JSON.stringify({ success: true, settings: results || [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+        });
+    } catch (error) {
+        console.error("Admin Get All Site Settings API Error:", error);
+        return createErrorResponse("Internal Server Error: " + error.message, 500);
+    }
+}
+
+
+// PUT /api/admin/settings/:setting_key - 修改/创建网站设置 (管理员)
+async function handleAdminUpdateSiteSetting(request, env, settingKey) {
+    const adminVerification = await verifyAdmin(request, env);
+    if (!adminVerification.authorized) {
+        return createErrorResponse(adminVerification.error, adminVerification.error.startsWith('Unauthorized') ? 401 : 403);
+    }
+
+    if (!settingKey) {
+        return createErrorResponse("Setting key is required in the path.", 400);
+    }
+
+    try {
+        const { value, description } = await request.json();
+
+        if (value === undefined) { // value 可以是空字符串，但不能是 undefined
+            return createErrorResponse("Setting 'value' is required in the request body.", 400);
+        }
+
+        const currentTime = new Date().toISOString().replace('T', ' ').split('.')[0]; // YYYY-MM-DD HH:MM:SS
+
+        // 使用 UPSERT 逻辑：如果 key 存在则更新，不存在则插入
+        // D1 支持 INSERT ... ON CONFLICT ... DO UPDATE SET ...
+        const stmt = env.DB.prepare(
+            `INSERT INTO site_settings (setting_key, setting_value, description, last_updated) 
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(setting_key) DO UPDATE SET 
+                setting_value = excluded.setting_value, 
+                description = excluded.description,
+                last_updated = excluded.last_updated`
+        );
+        
+        const { success, meta } = await stmt.bind(
+            settingKey, 
+            value, 
+            description !== undefined ? description : null, // description can be null
+            currentTime
+        ).run();
+
+        if (success) {
+            // meta.changes 可能是 1 (insert or update) 或 0 (no actual change if values were same, though last_updated changes)
+            // D1 的 UPSERT 行为，即使值相同，只要执行了 UPDATE 分支，changes 可能也为 1。
+            // 最好是返回更新/创建后的值。
+            const { results: updatedSetting } = await env.DB.prepare(
+                "SELECT setting_key, setting_value, description, last_updated FROM site_settings WHERE setting_key = ? LIMIT 1"
+            ).bind(settingKey).first();
+
+            return new Response(JSON.stringify({ 
+                success: true, 
+                message: `Setting '${settingKey}' updated successfully.`,
+                setting: updatedSetting 
+            }), {
+                status: 200, headers: { 'Content-Type': 'application/json' },
+            });
+        } else {
+            return createErrorResponse(`Failed to update setting '${settingKey}'.`, 500);
+        }
+    } catch (error) {
+        console.error(`Update Site Setting (key: ${settingKey}) API Error:`, error);
+        return createErrorResponse("Internal Server Error: " + error.message, 500);
+    }
+}
 
 
 
@@ -1102,76 +1216,111 @@ export default {
         const path = url.pathname;
         const method = request.method;
 
-        // CORS 预检请求处理 (保持不变)
+        // CORS 预检请求处理
         if (method === 'OPTIONS') {
             return new Response(null, {
-                status: 204,
+                status: 204, // No Content
                 headers: {
                     'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
                     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-                    'Access-Control-Allow-Headers': 'Content-Type, Authorization, Cookie, X-Requested-With',
+                    'Access-Control-Allow-Headers': 'Content-Type, Authorization, Cookie, X-Requested-With', // 包含常用头部
                     'Access-Control-Allow-Credentials': 'true',
-                    'Access-Control-Max-Age': '86400',
+                    'Access-Control-Max-Age': '86400', // 预检结果缓存一天
                 },
             });
         }
 
         let response;
 
-        // 路由分发
-        // (用户认证路由保持不变)
-        if (method === 'POST' && path === '/api/register') { response = await handleRegister(request, env); }
-        else if (method === 'POST' && path === '/api/login') { response = await handleLogin(request, env); }
-        else if (method === 'GET' && path === '/api/user') { response = await handleGetUser(request, env); }
-        else if (method === 'POST' && path === '/api/user') { response = await handlePostUser(request, env); } // 你的旧 POST /api/user
-        
-        // (图书管理路由)
-        else if (method === 'POST' && path === '/addbooks') { response = await handleAddBook(request, env); }
-        else if (method === 'DELETE' && path === '/deletebooks') { response = await handleDeleteBook(request, env); }
-        else if (method === 'GET' && path === '/searchbooks') { response = await handleSearchBook(request, env); }
-        else if (method === 'POST' && path === '/borrowbooks') { response = await handleBorrowBook(request, env); }
-        else if (method === 'PUT' && path === '/returnbooks') { response = await handleReturnBook(request, env); }
-        else if (method === 'GET' && path === '/managebooks') { response = await handleAdminLibrary(request, env); }
-        // 新增：修改图书路由
-        else if (method === 'PUT' && path.startsWith('/editbook/')) {
+        // --- 路由分发 ---
+
+        // 1. 用户认证 API
+        if (method === 'POST' && path === '/api/register') {
+            response = await handleRegister(request, env);
+        } else if (method === 'POST' && path === '/api/login') {
+            response = await handleLogin(request, env);
+        } else if (method === 'GET' && path === '/api/user') { // 获取当前登录用户信息
+            response = await handleGetUser(request, env);
+        } 
+        // 移除了旧的 POST /api/user, 因为它的功能 (管理员验证) 应该由 verifyAdmin 在各自接口中处理
+        // 如果你仍有特定用途，可以保留 handlePostUser 并添加相应路由
+
+        // 2. 图书管理 API
+        else if (method === 'POST' && path === '/addbooks') {
+            response = await handleAddBook(request, env);
+        } else if (method === 'PUT' && path.startsWith('/editbook/')) { // 修改图书
             const isbn = path.substring('/editbook/'.length);
             if (isbn) {
                 response = await handleEditBook(request, env, isbn);
             } else {
                 response = createErrorResponse("ISBN is missing in the path for editing a book.", 400);
             }
+        } else if (method === 'DELETE' && path === '/deletebooks') { // 请确保这个路径和前端调用一致，或者改为 /books/:isbn
+            response = await handleDeleteBook(request, env);
+        } else if (method === 'GET' && path === '/searchbooks') { // 或 /books
+            response = await handleSearchBook(request, env);
+        } else if (method === 'POST' && path === '/borrowbooks') {
+            response = await handleBorrowBook(request, env);
+        } else if (method === 'PUT' && path === '/returnbooks') {
+            response = await handleReturnBook(request, env);
+        } else if (method === 'GET' && path === '/managebooks') { // 图书馆管理子功能 (借阅记录、逾期等)
+            response = await handleAdminLibrary(request, env);
         }
-        // (管理员用户管理 API 路由保持不变)
+
+        // 3. 管理员 - 用户管理 API
         else if (path.startsWith('/api/admin/users')) {
             const userIdMatch = path.match(/^\/api\/admin\/users\/([a-zA-Z0-9_-]+)$/);
             if (method === 'GET') {
-                if (userIdMatch) { response = await handleAdminGetUserById(request, env, userIdMatch[1]); }
-                else if (path === '/api/admin/users') { response = await handleAdminGetUsers(request, env); }
-            } else if (method === 'POST' && path === '/api/admin/users') { response = await handleAdminCreateUser(request, env); }
-            else if (method === 'PUT' && userIdMatch) { response = await handleAdminUpdateUser(request, env, userIdMatch[1]); }
-            else if (method === 'DELETE' && userIdMatch) { response = await handleAdminDeleteUser(request, env, userIdMatch[1]); }
-        }
-        // 新增：管理员统计 API 路由
-        else if (method === 'GET' && path === '/api/admin/stats') {
-            response = await handleAdminGetStats(request, env);
-        }
-        // 新增：统计 API 路由
-        else if (method === 'GET' && path === '/api/stats/top-borrowers') {
-            response = await handleGetTopBorrowers(request, env);
-        }
-        // 未匹配
-        else {
-            response = createErrorResponse("Not Found: The requested endpoint does not exist.", 404);
+                if (userIdMatch) { // GET /api/admin/users/:userId
+                    response = await handleAdminGetUserById(request, env, userIdMatch[1]);
+                } else if (path === '/api/admin/users') { // GET /api/admin/users
+                    response = await handleAdminGetUsers(request, env);
+                }
+            } else if (method === 'POST' && path === '/api/admin/users') { // POST /api/admin/users
+                response = await handleAdminCreateUser(request, env);
+            } else if (method === 'PUT' && userIdMatch) { // PUT /api/admin/users/:userId
+                response = await handleAdminUpdateUser(request, env, userIdMatch[1]);
+            } else if (method === 'DELETE' && userIdMatch) { // DELETE /api/admin/users/:userId
+                response = await handleAdminDeleteUser(request, env, userIdMatch[1]);
+            }
         }
 
-        // 为所有实际响应添加宽松的 CORS 头部 (保持不变)
-        if (response) {
-            const finalResponse = new Response(response.body, response);
-            finalResponse.headers.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*');
-            finalResponse.headers.set('Access-Control-Allow-Credentials', 'true');
-            return finalResponse;
+        // 4. 网站设置 API
+        else if (path.startsWith('/api/settings/')) { // 公开获取单个设置
+            const settingKey = path.substring('/api/settings/'.length);
+            if (method === 'GET' && settingKey) {
+                response = await handleGetSiteSetting(request, env, settingKey);
+            }
+        } else if (path.startsWith('/api/admin/settings')) { // 管理员操作设置
+            const settingKeyMatch = path.match(/^\/api\/admin\/settings\/([a-zA-Z0-9_.-]+)$/); // 键名可以包含点
+            if (method === 'GET' && path === '/api/admin/settings') { // GET all settings for admin
+                response = await handleAdminGetAllSiteSettings(request, env);
+            } else if (method === 'PUT' && settingKeyMatch) { // PUT /api/admin/settings/:setting_key
+                response = await handleAdminUpdateSiteSetting(request, env, settingKeyMatch[1]);
+            }
         }
         
-        return createErrorResponse("Internal Server Error: No response generated.", 500);
+        // 5. 统计 API
+        else if (method === 'GET' && path === '/api/admin/stats') { // 管理员仪表盘统计
+            response = await handleAdminGetStats(request, env);
+        } else if (method === 'GET' && path === '/api/stats/top-borrowers') { // 热门借阅者 (登录用户)
+            response = await handleGetTopBorrowers(request, env);
+        }
+
+        // 如果没有匹配到任何已知路由
+        if (!response) {
+            response = createErrorResponse("Endpoint Not Found. The requested resource or method is not available.", 404);
+        }
+
+        // --- 为所有实际响应添加宽松的 CORS 头部 ---
+        // (确保 response 对象存在，以防未来有未返回 response 的路径)
+        // 克隆响应以便修改头部，这是必要的，因为 Response 对象的 headers 是不可变的。
+        const finalResponse = new Response(response.body, response);
+        finalResponse.headers.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*');
+        finalResponse.headers.set('Access-Control-Allow-Credentials', 'true');
+        // 如果有其他需要暴露给前端的头部（除了 CORS 标准头部和 Set-Cookie 之外），可以在这里添加
+        // 例如：finalResponse.headers.append('Access-Control-Expose-Headers', 'X-My-Custom-Header, X-Total-Count');
+        
+        return finalResponse;
     },
 };
