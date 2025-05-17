@@ -2,21 +2,21 @@
 name = "tw-api"
 compatibility_date = "2024-03-01" # 或者你选择的最新日期
 
+# 明确指定构建后的 Worker 脚本入口点
+main = "./dist/worker.js"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "library"
 database_id = "13cdef99-aa9e-4f12-9e7b-14ace0d5c92d"
 
 [build]
-command = "npm ci && npm run build" # 确保 package-lock.json 是最新的
+command = "npm ci && npm run build"
 watch_dir = "src"
 
 [observability]
-enabled = true # 明确启用
-# sampling_rate = 1.0 # 老的配置，Wrangler 3 可能不再需要或有不同方式
-# 你可以添加更细致的 tail worker 配置，如果需要
+enabled = true
+# head_sampling_rate = 1.0
 # tail_sampling_rules = [
 #   { status_code_ranges = ["500-599"], sampling_rate = 1.0 }
 # ]
-
-# main = "./dist/worker.js" # 通常不需要，Wrangler 会自动找到
