@@ -1,8 +1,11 @@
 # wrangler.toml
 name = "tw-api"
-compatibility_date = "2025-03-01" # 或者你选择的最新日期
+# compatibility_date = "2024-03-01" # 更新到或晚于 2024-09-23
+compatibility_date = "2024-09-23"   # 或使用一个最新的日期，例如 "2024-04-05"
 
-# 明确指定构建后的 Worker 脚本入口点
+# 添加 nodejs_compat 标志
+compatibility_flags = [ "nodejs_compat" ]
+
 main = "./dist/worker.js"
 
 [[d1_databases]]
@@ -16,7 +19,3 @@ watch_dir = "src"
 
 [observability]
 enabled = true
-# head_sampling_rate = 1.0
-# tail_sampling_rules = [
-#   { status_code_ranges = ["500-599"], sampling_rate = 1.0 }
-# ]
