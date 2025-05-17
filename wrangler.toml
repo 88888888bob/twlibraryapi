@@ -1,0 +1,26 @@
+name = "tw-api" # 给合并后的项目起一个新名字
+main = "src/index.js"
+compatibility_date = "2023-10-26" # 可以使用最新的兼容日期
+
+[[d1_databases]]
+binding = "DB" # 绑定 D1 数据库的名称
+database_name = "library" # 你的 D1 数据库名称 (两个项目使用同一个)
+database_id = "13cdef99-aa9e-4f12-9e7b-14ace0d5c92d"  # 你的 D1 数据库 ID (两个项目使用同一个)
+
+# 从项目 2 中引入构建配置
+[build]
+command = "npm install && npm run build"
+watch_dir = ["src"]
+
+[build.upload]
+format = "modules"
+
+[scripts]
+build = "esbuild src/index.js --bundle --outfile=dist/worker.js --platform=browser --format=esm"
+
+# [vars] # PASSWORD_SALT 来自项目 2，但 bcryptjs 会自动处理盐，所以除非你有特殊用途，否则可以不设置
+# PASSWORD_SALT = "your_strong_random_salt_here_if_needed_elsewhere"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
