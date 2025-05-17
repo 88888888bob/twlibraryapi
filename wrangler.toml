@@ -1,6 +1,6 @@
 # wrangler.toml
 name = "tw-api"
-compatibility_date = "2024-03-01" # 或者你选择的最新日期
+compatibility_date = "2025-03-01" # 或者你选择的最新日期
 
 # 明确指定构建后的 Worker 脚本入口点
 main = "./dist/worker.js"
