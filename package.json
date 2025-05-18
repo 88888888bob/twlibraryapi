@@ -16,8 +16,8 @@
   "devDependencies": {
     "esbuild": "^0.20.2",
     "esbuild-plugin-polyfill-node": "^0.3.0",
-    "wrangler": "^3.47.0",
-    "jsdom": "^24.0.0"
+    "jsdom": "^24.0.0",
+    "wrangler": "^3.47.0"
   },
   "module": "./dist/worker.js"
 }
