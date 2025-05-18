@@ -2,9 +2,7 @@
 import * as bcrypt from 'bcryptjs';
 import { nanoid } from 'nanoid';
 import { serialize } from 'cookie';
-//import DOMPurify from 'dompurify';
-//import { JSDOM } from 'jsdom'; // 用于在非浏览器环境中为 DOMPurify 提供一个 DOM 实现
-import DOMPurify from 'isomorphic-dompurify'; // <--- 修改这里：使用 isomorphic-dompurify
+import sanitizeHtml from 'sanitize-html'; // 引入 sanitize-html
 
 // --- 常量 ---
 const COOKIE_NAME = 'library_session'; // 统一的 Cookie 名称
@@ -1168,40 +1166,75 @@ async function handleAdminUpdateSiteSetting(request, env, settingKey) {
             return createErrorResponse("Setting 'value' is required in the request body.", 400);
         }
 
+        // --- HTML Sanitization for specific keys using sanitize-html ---
         const htmlSettingKeys = ['announcement_bar_html', 'news_content_html', 'comment_html']; // 扩展这个列表
 
         if (htmlSettingKeys.includes(settingKey)) {
-            if (typeof value === 'string' && value.trim() !== '') {
-                // 使用 isomorphic-dompurify 进行清理
-                // 它会在服务器端自动处理 JSDOM 的创建（如果需要）
-                const sanitizeConfig = {
-                    USE_PROFILES: { html: true },
-                    ALLOWED_TAGS: [
+            if (typeof value === 'string') {
+                // 配置 sanitize-html (非常重要，仔细配置!)
+                const sanitizeOptions = {
+                    allowedTags: [ // 列出你从 Quill 编辑器期望得到的所有安全标签
                         'p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'strike', 'span',
-                        'a', 'ul', 'ol', 'li', 
+                        'a', 'ul', 'ol', 'li',
                         'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
                         'blockquote', 'pre', 'code',
-                        // 根据 Quill 生成的 HTML 和你的安全需求仔细配置
+                        // Quill 的公式和图片会生成特定标签，如果启用了需要加入
+                        // 例如图片：'img'
+                        // 例如公式 (KaTeX 生成的通常是 span 和其他数学排版标签，需要检查)
                     ],
-                    ALLOWED_ATTR: [
-                        'href', 'target', // for <a> tags
-                        'style',          // for inline styles like color, background-color
-                        'class',          // if you use classes for styling
-                        // 根据 Quill 生成的 HTML 和你的安全需求仔细配置
-                    ],
-                    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'style', /* 'form', 'input', 'button' 等 */],
-                    FORBID_ATTR: ['onerror', 'onload', 'onclick', /* 更多事件处理器 */],
-                    ALLOW_DATA_ATTR: false,
+                    allowedAttributes: { // 为每个允许的标签指定允许的属性
+                        'a': ['href', 'target', 'rel'], // rel="noopener noreferrer" 通常是好习惯
+                        'span': ['style', 'class'], // Quill 用 span 和 style 来处理颜色、背景、字体、字号
+                        'img': ['src', 'alt', 'title', 'width', 'height', 'style'],
+                        // 'p': ['style', 'class'], // 如果允许段落有特定样式
+                        // ... 其他标签的属性
+                        // 允许所有标签都有 class 属性 (如果你用类来控制样式)
+                        // '*': ['class']
+                    },
+                    allowedStyles: { // 如果允许 style 属性，进一步限制允许的 CSS 属性和值
+                        '*': { // 应用于所有允许 style 属性的标签
+                            // 例如：color, background-color, font-size, font-family, text-align
+                            'color': [/^#(0x)?[0-9a-f]+$/i, /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/],
+                            'background-color': [/^#(0x)?[0-9a-f]+$/i, /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/],
+                            'font-size': [/^\d+(?:px|em|rem|%)$/],
+                            'font-family': [/^[a-zA-Z\s,-]+$/], // 限制字体名称字符
+                            'text-align': [/^left$/, /^right$/, /^center$/, /^justify$/],
+                            // 禁止危险的 CSS
+                            // 'position': false, // sanitize-html 可能不会直接支持禁止特定 CSS 属性，而是通过不允许 style 标签或属性
+                        }
+                    },
+                    // 允许的 URL 协议 (对于 href 和 src)
+                    allowedSchemes: ['http', 'https', 'ftp', 'mailto', 'tel'],
+                    allowedSchemesByTag: {},
+                    // 自我闭合标签
+                    selfClosing: ['img', 'br', 'hr', 'area', 'base', 'basefont', 'input', 'link', 'meta'],
+                    // 转换标签 (例如，将 <b> 转为 <strong>)
+                    transformTags: {
+                        'b': 'strong',
+                        'i': 'em',
+                    },
+                    // 是否允许 HTML 注释
+                    allowComments: false,
+                    // ... 更多高级选项，请查阅 sanitize-html 文档
                 };
-                
-                console.log(`Sanitizing HTML for key: ${settingKey} before saving.`);
-                value = DOMPurify.sanitize(value, sanitizeConfig);
-                console.log(`Sanitized HTML for key: ${settingKey} successfully.`);
 
-            } else if (typeof value === 'string' && value.trim() === '') {
-                value = '';
+                // 为公告栏配置一个更严格的选项 (可选)
+                if (settingKey === 'announcement_bar_html') {
+                    sanitizeOptions.allowedTags = ['p', 'br', 'strong', 'em', 'u', 'a', 'span'];
+                    sanitizeOptions.allowedAttributes = {
+                        'a': ['href', 'target', 'rel'],
+                        'span': ['style'] // 只允许 span 有 style
+                    };
+                    sanitizeOptions.allowedStyles = {
+                        'span': { // span 上的 style 只允许这些
+                            'color': [/^#(0x)?[0-9a-f]+$/i, /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/],
+                        }
+                    };
+                }
+                value = sanitizeHtml(value, sanitizeOptions);
             }
         }
+        // --- End of HTML Sanitization ---
 
         const currentTime = new Date().toISOString().replace('T', ' ').split('.')[0];
 
@@ -1214,7 +1247,6 @@ async function handleAdminUpdateSiteSetting(request, env, settingKey) {
                 last_updated = excluded.last_updated`
         );
         
-        console.log(`Attempting to save setting: ${settingKey} with value (first 50 chars): ${String(value).substring(0,50)}`);
         const { success, meta } = await stmt.bind(
             settingKey, 
             value, // 使用清理后的 value
@@ -1223,7 +1255,6 @@ async function handleAdminUpdateSiteSetting(request, env, settingKey) {
         ).run();
 
         if (success) {
-            console.log(`Setting '${settingKey}' saved successfully to D1.`);
             const { results: updatedSetting } = await env.DB.prepare(
                 "SELECT setting_key, setting_value, description, last_updated FROM site_settings WHERE setting_key = ? LIMIT 1"
             ).bind(settingKey).first();
@@ -1248,6 +1279,7 @@ async function handleAdminUpdateSiteSetting(request, env, settingKey) {
         return createErrorResponse("Internal Server Error: " + error.message, 500);
     }
 }
+
 
 
 
