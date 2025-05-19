@@ -1,0 +1,16 @@
+src/
+├── index.js               # 主入口文件，负责路由和协调
+├── handlers/              # 存放不同功能的请求处理器
+│   ├── auth.js            # 用户认证相关的 handlers (register, login, getUser)
+│   ├── books.js           # 图书管理相关的 handlers (addBook, searchBooks, editBook)
+│   ├── libraryAdmin.js    # 图书馆管理 (借阅记录、逾期) handlers
+│   ├── userAdmin.js       # 管理员用户管理 handlers
+│   ├── blog.js            # 新的博客 API handlers
+│   ├── settings.js        # 网站设置 API handlers
+│   └── stats.js           # 统计 API handlers
+├── utils/                 # 通用工具函数
+│   ├── responseHelper.js  # 例如 createErrorResponse
+│   ├── authHelper.js      # 例如 verifyAdmin, verifyUser
+│   └── dbHelper.js        # (可选) 数据库交互的辅助函数
+└── services/              # (可选) 更复杂的业务逻辑层
+└── sessionService.js  # 例如处理会话创建、验证等
