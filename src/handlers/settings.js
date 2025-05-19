@@ -5,31 +5,53 @@ import { verifyAdmin } from '../utils/authHelper.js';
 
 export async function handleGetSiteSetting(request, env, settingKey) {
     console.log(`[HANDLER handleGetSiteSetting] START - Key: "${settingKey}"`);
-    
     if (!settingKey || settingKey.trim() === "") { // 更严格的检查
         console.warn(`[HANDLER handleGetSiteSetting] EMPTY or INVALID key received: "${settingKey}"`);
         return createErrorResponse("Setting key is required and cannot be empty.", 400);
     }
     try {
-        const stmt = env.DB.prepare("SELECT setting_value, last_updated FROM site_settings WHERE setting_key = ?");
-        const { results } = await stmt.bind(settingKey).first();
+        const query = "SELECT setting_value, last_updated FROM site_settings WHERE setting_key = ?";
+        console.log(`[HANDLER handleGetSiteSetting] Preparing D1 statement for key: "${settingKey}", Query: "${query}"`);
+        const stmt = env.DB.prepare(query);
         
-        console.log(`[HANDLER handleGetSiteSetting] DB query for key "${settingKey}" returned: ${JSON.stringify(results)}`);
+        if (!stmt) {
+            console.error(`[HANDLER handleGetSiteSetting] Failed to prepare D1 statement for key: "${settingKey}"`);
+            return createErrorResponse("Server Error: Failed to prepare database statement.", 500);
+        }
+        console.log(`[HANDLER handleGetSiteSetting] Statement prepared. Binding key: "${settingKey}"`);
+        
+        const boundStmt = stmt.bind(settingKey);
+        if (!boundStmt) {
+            console.error(`[HANDLER handleGetSiteSetting] Failed to bind D1 statement for key: "${settingKey}"`);
+            return createErrorResponse("Server Error: Failed to bind database statement.", 500);
+        }
+        console.log(`[HANDLER handleGetSiteSetting] Statement bound. Executing .first() for key: "${settingKey}"`);
 
-        if (!results) {
-            console.log(`[HANDLER handleGetSiteSetting] Setting key "${settingKey}" NOT FOUND in DB.`);
+        const resultObject = await boundStmt.first(); // 直接获取 .first() 的结果
+        
+        // `resultObject` 应该是包含 `results` 属性的对象，或者如果 .first() 直接返回数据或 null，则直接是数据或 null
+        // D1 的 .first() 方法应该直接返回数据行对象或 null。
+        // 它不应该返回一个包含 .results 属性的对象，除非你用的是 .all() 然后取第一个，或者 API 有变化。
+
+        console.log(`[HANDLER handleGetSiteSetting] Raw result from .first() for key "${settingKey}":`, JSON.stringify(resultObject));
+
+        if (resultObject === null || resultObject === undefined) { // 明确检查 null 和 undefined
+            console.log(`[HANDLER handleGetSiteSetting] Setting key "${settingKey}" NOT FOUND in DB (result is null or undefined).`);
             return createErrorResponse(`Setting '${settingKey}' not found in database.`, 404);
         }
         
-        console.log(`[HANDLER handleGetSiteSetting] Setting key "${settingKey}" FOUND. Returning value.`);
+        // 如果 resultObject 不是 null/undefined，它就应该是包含数据的对象
+        console.log(`[HANDLER handleGetSiteSetting] Setting key "${settingKey}" FOUND. Value: "${resultObject.setting_value}", LastUpdated: "${resultObject.last_updated}"`);
         return new Response(JSON.stringify({
-            success: true, key: settingKey, value: results.setting_value, last_updated: results.last_updated
+            success: true, key: settingKey, value: resultObject.setting_value, last_updated: resultObject.last_updated
         }), { status: 200, headers: { 'Content-Type': 'application/json' }});
+
     } catch (error) {
-        console.error(`[HANDLER handleGetSiteSetting] ERROR for key "${settingKey}":`, error);
+        console.error(`[HANDLER handleGetSiteSetting] ERROR for key "${settingKey}":`, error, error.stack);
         return createErrorResponse("Server Error while fetching setting: " + error.message, 500);
     }
 }
+
 export async function handleAdminGetAllSiteSettings(request, env) {
     const adminVerification = await verifyAdmin(request, env);
     if (!adminVerification.authorized) return createErrorResponse(adminVerification.error, 401);
