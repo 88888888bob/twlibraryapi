@@ -4,28 +4,24 @@ import { createErrorResponse } from '../utils/responseHelper.js';
 import { verifyAdmin } from '../utils/authHelper.js';
 
 export async function handleGetSiteSetting(request, env, settingKey) {
-    console.log(`[HANDLER handleGetSiteSetting] START - Key: "${settingKey}"`);
     if (!settingKey || settingKey.trim() === "") { // 更严格的检查
         console.warn(`[HANDLER handleGetSiteSetting] EMPTY or INVALID key received: "${settingKey}"`);
         return createErrorResponse("Setting key is required and cannot be empty.", 400);
     }
     try {
         const query = "SELECT setting_value, last_updated FROM site_settings WHERE setting_key = ?";
-        console.log(`[HANDLER handleGetSiteSetting] Preparing D1 statement for key: "${settingKey}", Query: "${query}"`);
         const stmt = env.DB.prepare(query);
         
         if (!stmt) {
             console.error(`[HANDLER handleGetSiteSetting] Failed to prepare D1 statement for key: "${settingKey}"`);
             return createErrorResponse("Server Error: Failed to prepare database statement.", 500);
         }
-        console.log(`[HANDLER handleGetSiteSetting] Statement prepared. Binding key: "${settingKey}"`);
-        
         const boundStmt = stmt.bind(settingKey);
         if (!boundStmt) {
             console.error(`[HANDLER handleGetSiteSetting] Failed to bind D1 statement for key: "${settingKey}"`);
             return createErrorResponse("Server Error: Failed to bind database statement.", 500);
         }
-        console.log(`[HANDLER handleGetSiteSetting] Statement bound. Executing .first() for key: "${settingKey}"`);
+
 
         const resultObject = await boundStmt.first(); // 直接获取 .first() 的结果
         
