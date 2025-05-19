@@ -1,0 +1,25 @@
+src/
+├── index.js               # 主入口，路由分发，CORS处理，全局错误捕获
+├── config.js              # (可选) 存放共享常量 (COOKIE_NAME, ALLOWED_DOMAINS, API版本号等)
+|
+├── utils/                 # 通用工具函数
+│   ├── responseHelper.js  # createSuccessResponse, createErrorResponse
+│   ├── authHelper.js      # verifyUser, verifyAdmin (核心认证逻辑)
+│   ├── paginationHelper.js# (新增) 处理分页参数计算、生成分页元数据
+│   └── sanitizeHelper.js  # (新增) 封装 sanitize-html 的配置和调用逻辑
+|
+├── services/              # (可选，当业务逻辑复杂时)
+│   ├── sessionService.js  # 会话创建、验证、销毁 (目前可能在 auth.js 中)
+│   └── blogPostService.js # (可选) 封装文章创建、更新的复杂业务流程，如状态转换、通知等
+|
+└── handlers/              # 每个资源或功能模块一个文件，处理HTTP请求和响应
+    ├── auth.js            # 用户注册、登录、获取当前用户信息
+    ├── books.js           # 图书的CRUD、借阅、归还 (可能部分接口仅管理员)
+    ├── libraryAdmin.js    # （可并入books.js或adminSpecific.js）图书馆借阅管理相关(借阅记录、逾期)
+    ├── userAdmin.js       # 管理员对用户的CRUD操作
+    ├── settings.js        # 网站全局设置的CRUD (包括博客审核开关)
+    ├── stats.js           # 统计数据API (排行榜、仪表盘数据)
+    |
+    ├── blogPosts.js       # (新增) 博客文章的CRUD, 点赞, 状态变更(用户侧和管理员侧)
+    ├── blogTopics.js      # (新增) 博客话题的CRUD (管理员创建, 用户查看和筛选)
+    └── blogComments.js    # (未来) 博客评论的CRUD和管理

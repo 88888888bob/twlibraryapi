@@ -1,0 +1,54 @@
+阶段 1: 核心博客文章和话题功能 (基础)
+数据库表设计与创建:
+posts 表 (基本字段: id, title, content, user_id, created_at, updated_at, status, book_isbn?, book_title?)
+topics 表 (id, name, created_at)
+post_topics 关联表 (post_id, topic_id)
+sanitizeHelper.js: 实现HTML内容清理工具。
+话题管理 (Admin):
+POST /api/admin/blog/topics: 管理员创建话题 (handler: blogTopics.js)
+GET /api/blog/topics: 用户获取话题列表 (handler: blogTopics.js)
+简化版书籍搜索 (用户):
+GET /api/blog/search-books: 用户在写文章时搜索关联书籍 (handler: books.js 或新的 blogUtils.js)
+文章创建与发布 (用户):
+POST /api/blog/posts: 用户创建新文章/书评 (handler: blogPosts.js)
+支持关联书籍 (通过 book_isbn)。
+支持选择已有话题 (通过 topic_ids)。
+集成审核开关: 根据 site_settings 中的 'blog_post_requires_review' 决定初始状态。
+使用 sanitizeHelper.js 清理内容。
+文章查看 (公开):
+GET /api/blog/posts: 获取已发布的文章列表 (handler: blogPosts.js)
+GET /api/blog/posts/:postId: 获取单篇文章详情 (handler: blogPosts.js)
+同时加载关联的作者、书籍、话题信息。
+阶段 2: 完善文章功能与用户互动
+分页: 为所有列表API实现分页 (GET /api/blog/posts, GET /api/blog/topics 等) (使用 paginationHelper.js)。
+文章编辑与删除 (用户/作者):
+PUT /api/blog/posts/:postId: 文章作者编辑自己的文章。
+DELETE /api/blog/posts/:postId: 文章作者删除自己的文章。
+文章点赞:
+user_post_likes 表。
+POST /api/blog/posts/:postId/like
+DELETE /api/blog/posts/:postId/like
+文章阅读数: 实现 view_count 的增加逻辑。
+阶段 3: 管理员增强功能
+管理员控制审核开关:
+site_settings 表中添加 'blog_post_requires_review'。
+Admin后台“网站设置”页面可以修改此开关 (已部分实现)。
+管理员管理文章:
+PUT /api/admin/blog/posts/:postId/status: 管理员修改文章状态 (发布、下架、移至草稿)。
+(复用/增强) PUT /api/blog/posts/:postId: 管理员编辑任何文章。
+(复用/增强) DELETE /api/blog/posts/:postId: 管理员删除任何文章。
+管理员管理话题:
+PUT /api/admin/blog/topics/:topicId: 编辑话题。
+DELETE /api/admin/blog/topics/:topicId: 删除话题。
+文章置顶/推荐:
+posts 表添加 is_featured 字段。
+实现管理员设置/取消推荐的API。
+阶段 4: 评论系统 (未来)
+数据库表: comments 表。
+评论API: 创建、获取、管理评论。
+内容审核: 评论也需要审核机制和内容清理。
+阶段 5: 进阶功能与优化 (未来)
+用户个人主页/动态: 显示用户发布的文章、评论、点赞等。
+通知系统: 新评论、回复、文章被推荐等通知。
+搜索功能增强: 全文搜索、高级筛选。
+性能优化: 缓存、数据库查询优化。

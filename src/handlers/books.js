@@ -1,6 +1,8 @@
 // src/handlers/books.js
 import { createErrorResponse } from '../utils/responseHelper.js';
 import { verifyAdmin, verifyUser } from '../utils/authHelper.js';
+import { verifyUser } from '../utils/authHelper.js'; // 确保引入 verifyUser
+import { getPaginationParams, formatPaginatedResponse } from '../utils/paginationHelper.js';
 
 // --- 内部图书数据库操作辅助函数 ---
 async function getBookByISBNInternal(env, isbn) {
@@ -244,5 +246,40 @@ export async function handleReturnBook(request, env) {
     } catch (error) {
         console.error("Return Book API Error:", error);
         return createErrorResponse("Server Error: " + error.message, 500);
+    }
+}
+
+export async function handleBlogSearchBooks(request, env) {
+    // User needs to be logged in to use this while writing a post
+    const userVerification = await verifyUser(request, env);
+    if (!userVerification.authorized) {
+        return createErrorResponse(userVerification.error, 401);
+    }
+
+    try {
+        const url = new URL(request.url);
+        const searchQuery = url.searchParams.get('query');
+        const limit = parseInt(url.searchParams.get('limit')) || 10; // Default limit
+
+        if (!searchQuery || searchQuery.trim() === '') {
+            return createErrorResponse("Search query is required.", 400);
+        }
+        if (limit <=0 || limit > 50) { // Max limit to prevent abuse
+            return createErrorResponse("Limit must be between 1 and 50.", 400);
+        }
+
+        const searchTerm = `%${searchQuery.trim()}%`;
+        
+        // Search by title or ISBN
+        // We only need isbn and title for this endpoint
+        const { results } = await env.DB.prepare(
+            "SELECT isbn, title FROM books WHERE title LIKE ? OR isbn LIKE ? ORDER BY title ASC LIMIT ?"
+        ).bind(searchTerm, searchTerm, limit).all();
+
+        return new Response(JSON.stringify({ success: true, books: results || [] }), { status: 200 });
+
+    } catch (error) {
+        console.error("Blog Search Books Error:", error);
+        return createErrorResponse("Server error while searching books: " + error.message, 500);
     }
 }

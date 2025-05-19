@@ -19,6 +19,11 @@ import {
     handleGetSiteSetting, handleAdminGetAllSiteSettings, handleAdminUpdateSiteSetting 
 } from './handlers/settings.js';
 
+import { handleAdminCreateTopic, handleGetTopics } from './handlers/blogTopics.js';
+import { handleBlogSearchBooks } from './handlers/books.js'; // 从 books.js 导入
+import { handleCreateBlogPost, handleGetBlogPosts, handleGetBlogPostById } from './handlers/blogPosts.js';
+
+
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -99,6 +104,30 @@ export default {
             // else if (path.startsWith('/api/blog/posts')) {
             //    if (method === 'GET') response = await handleGetBlogPosts(request, env); // from ./handlers/blog.js
             // }
+            // --- NEW: Blog API Routes ---
+            // Topics
+            else if (path === '/api/admin/blog/topics' && method === 'POST') { // Admin creates topic
+                response = await handleAdminCreateTopic(request, env);
+            } else if (path === '/api/blog/topics' && method === 'GET') { // Public list topics
+                response = await handleGetTopics(request, env);
+            }
+            // Book Search for Blog
+            else if (path === '/api/blog/search-books' && method === 'GET') { // User searches books while writing post
+                response = await handleBlogSearchBooks(request, env);
+            }
+            // Blog Posts
+            else if (path === '/api/blog/posts' && method === 'POST') { // User creates post
+                response = await handleCreateBlogPost(request, env);
+            } else if (path === '/api/blog/posts' && method === 'GET') { // Public list posts
+                response = await handleGetBlogPosts(request, env);
+            } else if (path.startsWith('/api/blog/posts/')) {
+                const postIdMatch = path.match(/^\/api\/blog\/posts\/(\d+)$/); // Matches /api/blog/posts/{postId}
+                if (postIdMatch && method === 'GET') { // Public get single post
+                    response = await handleGetBlogPostById(request, env, postIdMatch[1]);
+                }
+                // Add PUT (edit) and DELETE routes here later
+            }
+
 
             // Fallback for unhandled paths
             if (!response) {
