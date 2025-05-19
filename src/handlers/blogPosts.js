@@ -266,3 +266,265 @@ export async function handleGetBlogPostById(request, env, postId) {
         return createErrorResponse("Server error: " + error.message, 500);
     }
 }
+
+export async function handleUpdateBlogPost(request, env, postId) {
+    const userVerification = await verifyUser(request, env);
+    if (!userVerification.authorized) {
+        return createErrorResponse(userVerification.error || "User authentication failed.", 401);
+    }
+    if (!postId || !/^\d+$/.test(postId)) {
+        return createErrorResponse("Invalid Post ID format.", 400);
+    }
+    const numericPostId = parseInt(postId);
+
+    try {
+        const existingPost = await env.DB.prepare("SELECT id, user_id, status FROM blog_posts WHERE id = ?")
+            .bind(numericPostId)
+            .first();
+
+        if (!existingPost) {
+            return createErrorResponse("Post not found.", 404);
+        }
+
+        // 权限检查：必须是文章作者或管理员
+        if (existingPost.user_id !== userVerification.userId && userVerification.role !== 'admin') {
+            return createErrorResponse("Forbidden: You do not have permission to edit this post.", 403);
+        }
+
+        const body = await request.json();
+        const { title, content, excerpt, book_isbn, topic_ids, status: newStatus } = body; // newStatus for admin
+        
+        let updateFields = [];
+        let paramsToBind = [];
+        const esc = (val) => val; // Placeholder if escapeHtml is not needed for bind params
+
+        if (title !== undefined && typeof title === 'string') {
+            updateFields.push("title = ?"); paramsToBind.push(title.trim());
+            // 如果标题改变，slug 也应该重新生成或更新
+            const newSlug = generatePostSlug(title.trim()); // 确保 generatePostSlug 已定义
+            updateFields.push("slug = ?"); paramsToBind.push(newSlug);
+        }
+        if (content !== undefined && typeof content === 'string') {
+            updateFields.push("content = ?"); paramsToBind.push(sanitizeBlogContent(content, 'default'));
+        }
+        if (excerpt !== undefined) { // excerpt 可以是空字符串
+            updateFields.push("excerpt = ?"); paramsToBind.push((typeof excerpt === 'string' && excerpt.trim() !== '') ? excerpt.trim() : null);
+        }
+
+        let newBookTitle = existingPost.book_title; // Keep existing if not changed
+        if (book_isbn !== undefined) { // book_isbn 可以被设为 null 来移除关联
+            if (book_isbn === null || (typeof book_isbn === 'string' && book_isbn.trim() === '')) {
+                updateFields.push("book_isbn = ?"); paramsToBind.push(null);
+                updateFields.push("book_title = ?"); paramsToBind.push(null);
+                newBookTitle = null;
+            } else if (typeof book_isbn === 'string' && book_isbn.trim() !== '') {
+                const book = await env.DB.prepare("SELECT title FROM books WHERE isbn = ?").bind(book_isbn.trim()).first();
+                if (!book) return createErrorResponse(`Book with ISBN ${book_isbn} not found.`, 404);
+                updateFields.push("book_isbn = ?"); paramsToBind.push(book_isbn.trim());
+                updateFields.push("book_title = ?"); paramsToBind.push(book.title);
+                newBookTitle = book.title;
+            }
+        }
+        
+        // 管理员可以修改 status，普通用户修改后可能回到 pending_review
+        if (newStatus !== undefined && userVerification.role === 'admin' && ['draft', 'pending_review', 'published', 'archived'].includes(newStatus)) {
+            updateFields.push("status = ?"); paramsToBind.push(newStatus);
+            if (newStatus === 'published' && existingPost.status !== 'published') {
+                updateFields.push("published_at = ?"); paramsToBind.push(new Date().toISOString().slice(0, 19).replace('T', ' '));
+            } else if (newStatus !== 'published' && existingPost.status === 'published') {
+                // 如果从已发布改为其他状态，是否要清空 published_at？取决于业务逻辑
+                // updateFields.push("published_at = ?"); paramsToBind.push(null);
+            }
+        } else if (newStatus === undefined && existingPost.status === 'published' && userVerification.role !== 'admin') {
+            // 如果普通用户编辑已发布的文章，且审核开启，则状态变回待审核
+            const reviewSetting = await env.DB.prepare("SELECT setting_value FROM site_settings WHERE setting_key = 'blog_post_requires_review'").first();
+            if (reviewSetting && reviewSetting.setting_value === 'true') {
+                updateFields.push("status = ?"); paramsToBind.push('pending_review');
+                // updateFields.push("published_at = ?"); paramsToBind.push(null); // 清空发布时间
+            }
+        }
+
+
+        if (updateFields.length === 0 && topic_ids === undefined) { // 检查是否有字段更新或话题更新
+            return createErrorResponse("No changes provided to update.", 400);
+        }
+        
+        const currentTime = new Date().toISOString().slice(0, 19).replace('T', ' ');
+        updateFields.push("updated_at = ?"); paramsToBind.push(currentTime);
+        paramsToBind.push(numericPostId); // For WHERE id = ?
+
+        // --- 数据库操作 ---
+        // 使用 D1 batch 或分别执行
+        if (updateFields.length > 1) { // updated_at 总是会加 1，所以至少是 1
+            const updatePostQuery = `UPDATE blog_posts SET ${updateFields.join(", ")} WHERE id = ?`;
+            await env.DB.prepare(updatePostQuery).bind(...paramsToBind).run();
+        }
+
+        // 更新话题关联 (先删除旧的，再插入新的)
+        if (topic_ids !== undefined && Array.isArray(topic_ids)) {
+            await env.DB.prepare("DELETE FROM blog_post_topics WHERE post_id = ?").bind(numericPostId).run();
+            const validTopicIds = topic_ids.filter(id => typeof id === 'number' && id > 0);
+            if (validTopicIds.length > 0) {
+                const topicOps = validTopicIds.map(topicId => 
+                    env.DB.prepare("INSERT INTO blog_post_topics (post_id, topic_id) VALUES (?, ?)")
+                        .bind(numericPostId, topicId)
+                );
+                await env.DB.batch(topicOps);
+            }
+        }
+        
+        const updatedPost = await env.DB.prepare( // 复用获取单篇博客的查询，但去除状态和可见性限制
+             `SELECT p.*, u.username as author_actual_username_from_users_table,
+             (SELECT json_group_array(json_object('id', t.id, 'name', t.name, 'slug', t.slug)) FROM blog_topics t JOIN blog_post_topics bpt ON t.id = bpt.topic_id WHERE bpt.post_id = p.id) as topics_json_array_str
+             FROM blog_posts p LEFT JOIN users u ON p.user_id = u.id WHERE p.id = ?`
+        ).bind(numericPostId).first();
+        
+        if(updatedPost && updatedPost.topics_json_array_str) {
+             try { updatedPost.topics = JSON.parse(updatedPost.topics_json_array_str); } catch(e) { updatedPost.topics = []; }
+        } else {
+            updatedPost.topics = [];
+        }
+        delete updatedPost.topics_json_array_str;
+        updatedPost.author_username = updatedPost.author_actual_username_from_users_table || updatedPost.username || 'Unknown Author';
+
+
+        return new Response(JSON.stringify({ success: true, message: "Post updated successfully.", post: updatedPost }), { status: 200 });
+
+    } catch (error) {
+        console.error(`Update Blog Post (ID: ${numericPostId}) Error:`, error, error.stack);
+        if (error.message.includes("UNIQUE constraint failed")) {
+            return createErrorResponse("Update failed: Title or slug might conflict with an existing post.", 409);
+        }
+        return createErrorResponse("Server error during post update: " + error.message, 500);
+    }
+}
+
+
+export async function handleDeleteBlogPost(request, env, postId) {
+    const userVerification = await verifyUser(request, env);
+    if (!userVerification.authorized) {
+        return createErrorResponse(userVerification.error || "User authentication failed.", 401);
+    }
+    if (!postId || !/^\d+$/.test(postId)) {
+        return createErrorResponse("Invalid Post ID format.", 400);
+    }
+    const numericPostId = parseInt(postId);
+
+    try {
+        const post = await env.DB.prepare("SELECT id, user_id FROM blog_posts WHERE id = ?").bind(numericPostId).first();
+        if (!post) {
+            return createErrorResponse("Post not found.", 404);
+        }
+
+        // 权限检查：必须是文章作者或管理员
+        if (post.user_id !== userVerification.userId && userVerification.role !== 'admin') {
+            return createErrorResponse("Forbidden: You do not have permission to delete this post.", 403);
+        }
+
+        // 数据库中已设置 ON DELETE CASCADE for blog_post_topics, blog_post_likes, blog_comments
+        // 所以只需要删除 blog_posts 表中的记录
+        const { success, meta } = await env.DB.prepare("DELETE FROM blog_posts WHERE id = ?").bind(numericPostId).run();
+
+        if (success && meta.changes > 0) {
+            return new Response(JSON.stringify({ success: true, message: "Post deleted successfully." }), { status: 200 });
+            // 对于 204 No Content 也可以：return new Response(null, { status: 204 });
+        } else {
+            return createErrorResponse("Failed to delete post or post already deleted.", 404); // Or 500 if unexpected
+        }
+
+    } catch (error) {
+        console.error(`Delete Blog Post (ID: ${numericPostId}) Error:`, error, error.stack);
+        return createErrorResponse("Server error during post deletion: " + error.message, 500);
+    }
+}
+
+
+export async function handleLikeBlogPost(request, env, postId) {
+    const userVerification = await verifyUser(request, env);
+    if (!userVerification.authorized) {
+        return createErrorResponse(userVerification.error || "User authentication failed.", 401);
+    }
+    if (!postId || !/^\d+$/.test(postId)) {
+        return createErrorResponse("Invalid Post ID format.", 400);
+    }
+    const numericPostId = parseInt(postId);
+    const userId = userVerification.userId;
+
+    try {
+        const post = await env.DB.prepare("SELECT id, like_count FROM blog_posts WHERE id = ? AND status = 'published'") // Only like published posts
+            .bind(numericPostId).first();
+        if (!post) {
+            return createErrorResponse("Post not found or not available for liking.", 404);
+        }
+
+        // 检查是否已点赞
+        const existingLike = await env.DB.prepare("SELECT user_id FROM blog_post_likes WHERE user_id = ? AND post_id = ?")
+            .bind(userId, numericPostId).first();
+        
+        if (existingLike) {
+            return createErrorResponse("You have already liked this post.", 409); // Conflict
+        }
+
+        // 使用 D1 batch 来原子性地更新（或尽可能接近）
+        const operations = [
+            env.DB.prepare("INSERT INTO blog_post_likes (user_id, post_id, created_at) VALUES (?, ?, STRFTIME('%Y-%m-%d %H:%M:%S', 'now', 'localtime'))")
+                .bind(userId, numericPostId),
+            env.DB.prepare("UPDATE blog_posts SET like_count = like_count + 1 WHERE id = ?")
+                .bind(numericPostId)
+        ];
+        
+        await env.DB.batch(operations);
+        
+        const updatedPost = await env.DB.prepare("SELECT id, like_count FROM blog_posts WHERE id = ?").bind(numericPostId).first();
+
+        return new Response(JSON.stringify({ success: true, message: "Post liked successfully.", likes: updatedPost ? updatedPost.like_count : post.like_count + 1 }), { status: 200 });
+
+    } catch (error) {
+        console.error(`Like Blog Post (ID: ${numericPostId}) Error:`, error, error.stack);
+        if (error.message.includes("UNIQUE constraint failed")) { // Should be caught by existingLike check
+            return createErrorResponse("You have already liked this post (database constraint).", 409);
+        }
+        return createErrorResponse("Server error while liking post: " + error.message, 500);
+    }
+}
+
+
+export async function handleUnlikeBlogPost(request, env, postId) {
+    const userVerification = await verifyUser(request, env);
+    if (!userVerification.authorized) {
+        return createErrorResponse(userVerification.error || "User authentication failed.", 401);
+    }
+    if (!postId || !/^\d+$/.test(postId)) {
+        return createErrorResponse("Invalid Post ID format.", 400);
+    }
+    const numericPostId = parseInt(postId);
+    const userId = userVerification.userId;
+
+    try {
+        const post = await env.DB.prepare("SELECT id, like_count FROM blog_posts WHERE id = ?").bind(numericPostId).first();
+        if (!post) {
+            return createErrorResponse("Post not found.", 404);
+        }
+        if (post.like_count <= 0) { // Cannot unlike if likes are already zero or less
+            // return createErrorResponse("Post has no likes to remove.", 400);
+             // Or just proceed and let the delete fail silently if no record, then update like_count to 0
+        }
+
+        // 从 blog_post_likes 删除记录
+        const { meta: deleteMeta } = await env.DB.prepare("DELETE FROM blog_post_likes WHERE user_id = ? AND post_id = ?")
+            .bind(userId, numericPostId).run();
+
+        if (deleteMeta.changes > 0) { // 只有当确实删除了点赞记录时才更新计数器
+            await env.DB.prepare("UPDATE blog_posts SET like_count = CASE WHEN like_count > 0 THEN like_count - 1 ELSE 0 END WHERE id = ?")
+                .bind(numericPostId).run();
+        }
+        
+        const updatedPost = await env.DB.prepare("SELECT id, like_count FROM blog_posts WHERE id = ?").bind(numericPostId).first();
+
+        return new Response(JSON.stringify({ success: true, message: "Post unliked successfully.", likes: updatedPost ? updatedPost.like_count : Math.max(0, post.like_count - (deleteMeta.changes > 0 ? 1:0)) }), { status: 200 });
+
+    } catch (error) {
+        console.error(`Unlike Blog Post (ID: ${numericPostId}) Error:`, error, error.stack);
+        return createErrorResponse("Server error while unliking post: " + error.message, 500);
+    }
+}

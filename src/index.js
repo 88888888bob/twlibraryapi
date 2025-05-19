@@ -128,6 +128,27 @@ export default {
                 }
                 // Add PUT (edit) and DELETE routes here later
             }
+            // --- Blog Posts Routes (Updated) ---
+            else if (path === '/api/blog/posts' && method === 'POST') {
+                response = await handleCreateBlogPost(request, env);
+            } else if (path === '/api/blog/posts' && method === 'GET') {
+                response = await handleGetBlogPosts(request, env);
+            } else if (path.startsWith('/api/blog/posts/')) {
+                const postIdMatch = path.match(/^\/api\/blog\/posts\/(\d+)$/); // For /:postId
+                const likeMatch = path.match(/^\/api\/blog\/posts\/(\d+)\/like$/); // For /:postId/like
+
+                if (postIdMatch && method === 'GET') { // GET /api/blog/posts/:postId
+                    response = await handleGetBlogPostById(request, env, postIdMatch[1]);
+                } else if (postIdMatch && method === 'PUT') { // PUT /api/blog/posts/:postId
+                    response = await handleUpdateBlogPost(request, env, postIdMatch[1]);
+                } else if (postIdMatch && method === 'DELETE') { // DELETE /api/blog/posts/:postId
+                    response = await handleDeleteBlogPost(request, env, postIdMatch[1]);
+                } else if (likeMatch && method === 'POST') { // POST /api/blog/posts/:postId/like
+                    response = await handleLikeBlogPost(request, env, likeMatch[1]);
+                } else if (likeMatch && method === 'DELETE') { // DELETE /api/blog/posts/:postId/like
+                    response = await handleUnlikeBlogPost(request, env, likeMatch[1]);
+                }
+            }
 
 
             // Fallback for unhandled paths
