@@ -4,20 +4,32 @@ import { createErrorResponse } from '../utils/responseHelper.js';
 import { verifyAdmin } from '../utils/authHelper.js';
 
 export async function handleGetSiteSetting(request, env, settingKey) {
-    if (!settingKey) return createErrorResponse("Setting key required.", 400);
+    console.log(`[HANDLER handleGetSiteSetting] START - Key: "${settingKey}"`);
+    
+    if (!settingKey || settingKey.trim() === "") { // 更严格的检查
+        console.warn(`[HANDLER handleGetSiteSetting] EMPTY or INVALID key received: "${settingKey}"`);
+        return createErrorResponse("Setting key is required and cannot be empty.", 400);
+    }
     try {
-        const { results } = await env.DB.prepare("SELECT setting_value, last_updated FROM site_settings WHERE setting_key = ?")
-            .bind(settingKey).first();
-        if (!results) return createErrorResponse(`Setting '${settingKey}' not found.`, 404);
+        const stmt = env.DB.prepare("SELECT setting_value, last_updated FROM site_settings WHERE setting_key = ?");
+        const { results } = await stmt.bind(settingKey).first();
+        
+        console.log(`[HANDLER handleGetSiteSetting] DB query for key "${settingKey}" returned: ${JSON.stringify(results)}`);
+
+        if (!results) {
+            console.log(`[HANDLER handleGetSiteSetting] Setting key "${settingKey}" NOT FOUND in DB.`);
+            return createErrorResponse(`Setting '${settingKey}' not found in database.`, 404);
+        }
+        
+        console.log(`[HANDLER handleGetSiteSetting] Setting key "${settingKey}" FOUND. Returning value.`);
         return new Response(JSON.stringify({
             success: true, key: settingKey, value: results.setting_value, last_updated: results.last_updated
-        }), { status: 200 });
+        }), { status: 200, headers: { 'Content-Type': 'application/json' }});
     } catch (error) {
-        console.error(`Get Site Setting (key: ${settingKey}) Error:`, error);
-        return createErrorResponse("Server Error: " + error.message, 500);
+        console.error(`[HANDLER handleGetSiteSetting] ERROR for key "${settingKey}":`, error);
+        return createErrorResponse("Server Error while fetching setting: " + error.message, 500);
     }
 }
-
 export async function handleAdminGetAllSiteSettings(request, env) {
     const adminVerification = await verifyAdmin(request, env);
     if (!adminVerification.authorized) return createErrorResponse(adminVerification.error, 401);

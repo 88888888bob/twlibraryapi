@@ -75,8 +75,16 @@ export default {
 
             // 5. Settings API
             else if (path.startsWith('/api/settings/')) { // Public get single setting
-                const settingKey = path.substring('/api/settings/'.length);
-                if (method === 'GET' && settingKey) response = await handleGetSiteSetting(request, env, settingKey);
+                const settingKeyFromPath = path.substring('/api/settings/'.length);
+                console.log(`[ROUTER /api/settings/] Path: "${path}", Extracted key: "${settingKeyFromPath}"`);
+                if (method === 'GET' && settingKeyFromPath && settingKeyFromPath.trim() !== "") { // 确保不为空
+                    response = await handleGetSiteSetting(request, env, settingKeyFromPath);
+                } else {
+                    console.warn(`[ROUTER /api/settings/] Invalid or missing settingKey: "${settingKeyFromPath}"`);
+                    response = createErrorResponse("Valid setting key is required in the path.", 400);
+                }
+                // const settingKey = path.substring('/api/settings/'.length);
+                // if (method === 'GET' && settingKey) response = await handleGetSiteSetting(request, env, settingKey);
             } else if (path.startsWith('/api/admin/settings')) { // Admin settings
                 const settingKeyMatch = path.match(/^\/api\/admin\/settings\/([a-zA-Z0-9_.-]+)$/);
                 if (method === 'GET' && !settingKeyMatch) response = await handleAdminGetAllSiteSettings(request, env);
