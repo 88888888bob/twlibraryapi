@@ -3,6 +3,7 @@ import { createErrorResponse } from '../utils/responseHelper.js';
 import { verifyUser, verifyAdmin } from '../utils/authHelper.js';
 import { sanitizeBlogContent } from '../utils/sanitizeHelper.js';
 import { getPaginationParams, formatPaginatedResponse } from '../utils/paginationHelper.js';
+import slugify from 'slugify'; // 使用 import 导入
 
 // Helper to generate slug (simplified) - can be moved to a common util if used elsewhere
 function generatePostSlug(title) {

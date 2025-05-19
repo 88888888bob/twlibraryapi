@@ -1,7 +1,6 @@
 // src/handlers/books.js
 import { createErrorResponse } from '../utils/responseHelper.js';
 import { verifyAdmin, verifyUser } from '../utils/authHelper.js';
-import { verifyUser } from '../utils/authHelper.js'; // 确保引入 verifyUser
 import { getPaginationParams, formatPaginatedResponse } from '../utils/paginationHelper.js';
 
 // --- 内部图书数据库操作辅助函数 ---
