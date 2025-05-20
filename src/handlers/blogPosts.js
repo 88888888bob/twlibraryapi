@@ -147,10 +147,32 @@ export async function handleGetBlogPosts(request, env) {
         const { page, limit, offset } = getPaginationParams(request.url, 10);
         const url = new URL(request.url);
         
-        let conditions = ["p.status = 'published'", "p.visibility = 'public'"];
+        let conditions = []; // 初始为空
         let queryParams = [];
         let joins = `LEFT JOIN users u ON p.user_id = u.id`;
-        let groupByClause = "GROUP BY p.id"; // Default grouping
+
+        // 检查是否是管理员，如果是，可以查看所有状态，否则只看已发布的
+        // (这需要 verifyUser/verifyAdmin 返回更详细信息或有单独的 isAdmin 检查)
+        // 简单起见，我们先假设如果 status 参数被提供，就按它来筛选。
+        // 如果没有提供 status 参数，则默认是 published 和 public。
+        const userVerification = await verifyUser(request, env); // 尝试获取用户信息
+        let isAdminCall = false;
+        if (userVerification.authorized && userVerification.role === 'admin') {
+            isAdminCall = true;
+        }
+
+        const statusFilter = url.searchParams.get('status');
+        if (statusFilter) {
+            if (isAdminCall || statusFilter === 'published') { // 管理员可查任何状态，用户只能查 published
+                conditions.push("p.status = ?");
+                queryParams.push(statusFilter);
+            } else {
+                 return createErrorResponse("Forbidden: You cannot filter by this status.", 403);
+            }
+        } else { // 默认行为
+            conditions.push("p.status = 'published'");
+            conditions.push("p.visibility = 'public'");
+        }
 
         const topicIdStr = url.searchParams.get('topic_id');
         if (topicIdStr && /^\d+$/.test(topicIdStr)) {
