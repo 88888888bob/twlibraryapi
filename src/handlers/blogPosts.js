@@ -141,45 +141,25 @@ export async function handleCreateBlogPost(request, env) {
     }
 }
 
-
 export async function handleGetBlogPosts(request, env) {
     try {
         const { page, limit, offset } = getPaginationParams(request.url, 10);
         const url = new URL(request.url);
         
-        let conditions = []; // 初始为空
+        let conditions = ["p.status = 'published'", "p.visibility = 'public'"];
         let queryParams = [];
         let joins = `LEFT JOIN users u ON p.user_id = u.id`;
-
-        // 检查是否是管理员，如果是，可以查看所有状态，否则只看已发布的
-        // (这需要 verifyUser/verifyAdmin 返回更详细信息或有单独的 isAdmin 检查)
-        // 简单起见，我们先假设如果 status 参数被提供，就按它来筛选。
-        // 如果没有提供 status 参数，则默认是 published 和 public。
-        const userVerification = await verifyUser(request, env); // 尝试获取用户信息
-        let isAdminCall = false;
-        if (userVerification.authorized && userVerification.role === 'admin') {
-            isAdminCall = true;
-        }
-
-        const statusFilter = url.searchParams.get('status');
-        if (statusFilter) {
-            if (isAdminCall || statusFilter === 'published') { // 管理员可查任何状态，用户只能查 published
-                conditions.push("p.status = ?");
-                queryParams.push(statusFilter);
-            } else {
-                 return createErrorResponse("Forbidden: You cannot filter by this status.", 403);
-            }
-        } else { // 默认行为
-            conditions.push("p.status = 'published'");
-            conditions.push("p.visibility = 'public'");
-        }
 
         const topicIdStr = url.searchParams.get('topic_id');
         if (topicIdStr && /^\d+$/.test(topicIdStr)) {
             const topicId = parseInt(topicIdStr);
-            // Ensure distinct posts if one post has multiple topics but we only care about this one topic
-            joins += ` JOIN blog_post_topics bpt ON p.id = bpt.post_id`;
-            conditions.push("bpt.topic_id = ?");
+            // Important: JOINing blog_post_topics can lead to duplicate posts if a post has multiple topics
+            // and we are not filtering by a specific topic that would naturally limit it.
+            // If we are filtering BY a topic_id, then this JOIN is correct.
+            // If we are just listing posts and want to show their topics, the subquery for topics_list_str is better.
+            // The GROUP BY p.id later will handle de-duplication.
+            joins += ` JOIN blog_post_topics bpt ON p.id = bpt.post_id`; // Join to filter
+            conditions.push("bpt.topic_id = ?"); // Filter by this topic
             queryParams.push(topicId);
         }
         
@@ -197,32 +177,37 @@ export async function handleGetBlogPosts(request, env) {
 
         const searchTerm = url.searchParams.get('search');
         if (searchTerm) {
-            conditions.push("(p.title LIKE ? OR p.excerpt LIKE ? OR p.content LIKE ?)"); // Added content search
+            conditions.push("(p.title LIKE ? OR p.excerpt LIKE ? OR p.content LIKE ?)");
             const searchLike = `%${searchTerm}%`;
             queryParams.push(searchLike, searchLike, searchLike);
         }
         
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
+        // Query for total items
+        // For COUNT, if joining bpt for topic_id filter, use DISTINCT p.id
         const countSql = `SELECT COUNT(DISTINCT p.id) as total FROM blog_posts p ${joins} ${whereClause}`;
         const countResult = await env.DB.prepare(countSql).bind(...queryParams).first();
         const totalItems = countResult ? countResult.total : 0;
 
+        // Query for data
         const dataSql = `
             SELECT 
                 p.id, p.title, p.slug, p.excerpt, 
-                p.user_id, p.username as post_author_username_on_post_table, /* username stored on post */
+                p.user_id, p.username as post_author_username_on_post_table,
                 p.book_isbn, p.book_title, 
                 p.featured_image_url,
                 p.view_count, p.like_count, p.comment_count, p.is_featured,
-                STRFTIME('%Y-%m-%d', p.published_at) as published_date, /* Simpler date format */
-                u.username as author_actual_username /* username from users table */
+                STRFTIME('%Y-%m-%d', p.published_at) as published_date,
+                u.username as author_actual_username,
+                (SELECT GROUP_CONCAT(t_agg.name) FROM blog_topics t_agg JOIN blog_post_topics bpt_agg ON t_agg.id = bpt_agg.topic_id WHERE bpt_agg.post_id = p.id) as topics_list_str
             FROM blog_posts p
             ${joins} 
             ${whereClause} 
-            ${groupByClause} 
+            GROUP BY p.id  /* This is the correct way to group by post if joins cause duplication */
             ORDER BY p.is_featured DESC, p.published_at DESC, p.id DESC
             LIMIT ? OFFSET ?`;
+            // Make sure there are NO references to a variable named groupByClause here.
         
         const dataQueryParams = [...queryParams, limit, offset];
         const { results: postsData } = await env.DB.prepare(dataSql).bind(...dataQueryParams).all();
@@ -230,11 +215,10 @@ export async function handleGetBlogPosts(request, env) {
         const postsWithTopics = [];
         if (postsData) {
             for (const post of postsData) {
-                const topics = await getPostTopics(env, post.id);
+                // topics_list_str already fetched via subquery, just need to split it.
                 postsWithTopics.push({ 
                     ...post, 
-                    topics: topics,
-                    // Prefer username from users table if available, fallback to username on post
+                    topics: post.topics_list_str ? post.topics_list_str.split(',').map(t => ({ name: t })) : [], // Simplified topic object
                     author_username: post.author_actual_username || post.post_author_username_on_post_table || 'Unknown'
                 });
             }
@@ -247,7 +231,8 @@ export async function handleGetBlogPosts(request, env) {
 
     } catch (error) {
         console.error("Get Blog Posts Error:", error.message, error.stack);
-        return createErrorResponse("Server error while fetching blog posts: " + error.message, 500);
+        // Return the actual error message to the frontend for easier debugging
+        return createErrorResponse(`Server error while fetching blog posts: ${error.message}`, 500);
     }
 }
 
