@@ -1,27 +1,61 @@
 // src/index.js
 
-// 辅助函数导入
+// --- 辅助函数导入 ---
 import { createErrorResponse } from './utils/responseHelper.js';
 
-// Handler 导入
-import { handleRegister, handleLogin, handleGetUser, handlePostUser } from './handlers/auth.js';
+// --- Handler 导入 ---
 import { 
-    handleAddBook, handleEditBook, handleDeleteBook, handleSearchBook, 
-    handleBorrowBook, handleReturnBook 
+    handleRegister, 
+    handleLogin, 
+    handleGetUser, 
+    handlePostUser // 假设 handlePostUser 仍用于管理员验证或特定场景
+} from './handlers/auth.js';
+
+import { 
+    handleAddBook, 
+    handleEditBook, 
+    handleDeleteBook, 
+    handleSearchBook, // 这是管理员/登录用户的图书搜索
+    handleBorrowBook, 
+    handleReturnBook,
+    handleBlogSearchBooks // 这是博客模块专用的简化版图书搜索
 } from './handlers/books.js';
+
 import { handleAdminLibrary } from './handlers/libraryAdmin.js';
+
 import { 
-    handleAdminGetUsers, handleAdminGetUserById, handleAdminCreateUser, 
-    handleAdminUpdateUser, handleAdminDeleteUser 
+    handleAdminGetUsers, 
+    handleAdminGetUserById, 
+    handleAdminCreateUser, 
+    handleAdminUpdateUser, 
+    handleAdminDeleteUser 
 } from './handlers/userAdmin.js';
-import { handleGetTopBorrowers, handleAdminGetStats } from './handlers/stats.js';
+
 import { 
-    handleGetSiteSetting, handleAdminGetAllSiteSettings, handleAdminUpdateSiteSetting 
+    handleGetTopBorrowers, 
+    handleAdminGetStats 
+} from './handlers/stats.js';
+
+import { 
+    handleGetSiteSetting, 
+    handleAdminGetAllSiteSettings, 
+    handleAdminUpdateSiteSetting 
 } from './handlers/settings.js';
 
-import { handleAdminCreateTopic, handleGetTopics } from './handlers/blogTopics.js';
-import { handleBlogSearchBooks } from './handlers/books.js'; // 从 books.js 导入
-import { handleCreateBlogPost, handleGetBlogPosts, handleGetBlogPostById } from './handlers/blogPosts.js';
+import { 
+    handleAdminCreateTopic, // 管理员创建话题
+    handleGetTopics         // 公开获取话题列表
+} from './handlers/blogTopics.js';
+
+import { 
+    handleCreateBlogPost, 
+    handleGetBlogPosts, 
+    handleGetBlogPostById,
+    handleUpdateBlogPost,     // 编辑文章
+    handleDeleteBlogPost,     // 删除文章
+    handleLikeBlogPost,       // 点赞文章
+    handleUnlikeBlogPost      // 取消点赞文章
+} from './handlers/blogPosts.js';
 
 
 export default {
@@ -30,143 +64,155 @@ export default {
         const path = url.pathname;
         const method = request.method;
 
-        // CORS Preflight
+        console.log(`[WORKER ENTRY] ${new Date().toISOString()} - ${method} ${path}`);
+
+        // CORS Preflight Request Handling
         if (method === 'OPTIONS') {
             return new Response(null, {
-                status: 204,
+                status: 204, // No Content
                 headers: {
-                    'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
+                    'Access-Control-Allow-Origin': request.headers.get('Origin') || '*', // 生产环境应指定具体源
                     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
                     'Access-Control-Allow-Headers': 'Content-Type, Authorization, Cookie, X-Requested-With',
                     'Access-Control-Allow-Credentials': 'true',
-                    'Access-Control-Max-Age': '86400',
+                    'Access-Control-Max-Age': '86400', // Cache preflight for 1 day
                 },
             });
         }
 
         let response;
 
-        // --- 路由逻辑 ---
         try {
-            // 1. Auth API
-            if (path === '/api/register' && method === 'POST') response = await handleRegister(request, env);
-            else if (path === '/api/login' && method === 'POST') response = await handleLogin(request, env);
-            else if (path === '/api/user' && method === 'GET') response = await handleGetUser(request, env);
-            // else if (path === '/api/user' && method === 'POST') response = await handlePostUser(request, env); // If still needed
+            // --- 路由分发 ---
 
-            // 2. Books API
-            else if (path === '/addbooks' && method === 'POST') response = await handleAddBook(request, env); // Legacy path? Or /api/books
-            else if (path.startsWith('/editbook/') && method === 'PUT') { // Legacy path? Or /api/books/:isbn
-                const isbn = path.substring('/editbook/'.length);
-                response = await handleEditBook(request, env, isbn);
+            // 1. 用户认证 API (/api/auth/* 可能是更好的前缀)
+            if (path === '/api/register' && method === 'POST') {
+                response = await handleRegister(request, env);
+            } else if (path === '/api/login' && method === 'POST') {
+                response = await handleLogin(request, env);
+            } else if (path === '/api/user' && method === 'GET') { // 获取当前登录用户信息
+                response = await handleGetUser(request, env);
+            } else if (path === '/api/user' && method === 'POST') { // (假设用于管理员验证，可考虑移除或重构)
+                response = await handlePostUser(request, env);
             }
-            else if (path === '/deletebooks' && method === 'DELETE') response = await handleDeleteBook(request, env); // Legacy? Or /api/books
-            else if (path === '/searchbooks' && method === 'GET') response = await handleSearchBook(request, env); // Legacy? Or /api/books
-            else if (path === '/borrowbooks' && method === 'POST') response = await handleBorrowBook(request, env); // Legacy?
-            else if (path === '/returnbooks' && method === 'PUT') response = await handleReturnBook(request, env); // Legacy?
-            
-            // 3. Library Admin API (managebooks)
-            else if (path === '/managebooks' && method === 'GET') response = await handleAdminLibrary(request, env); // Legacy?
 
-            // 4. Admin User Management API
+            // 2. 图书管理 API (管理员或特定权限用户)
+            // 建议将这些路径统一前缀，例如 /api/admin/books/* 或 /api/books/* 并通过权限区分
+            else if (path === '/addbooks' && method === 'POST') { // 旧路径，考虑迁移到 /api/books
+                response = await handleAddBook(request, env);
+            } else if (path.startsWith('/editbook/') && method === 'PUT') { // 旧路径，考虑迁移到 /api/books/:isbn
+                const isbn = path.substring('/editbook/'.length);
+                if (isbn) response = await handleEditBook(request, env, isbn);
+                else response = createErrorResponse("ISBN missing for editbook.", 400);
+            } else if (path === '/deletebooks' && method === 'DELETE') { // 旧路径，考虑迁移到 /api/books (带 ISBN в body) 或 /api/books/:isbn
+                response = await handleDeleteBook(request, env);
+            } else if (path === '/searchbooks' && method === 'GET') { // 旧路径，考虑迁移到 /api/books/search 或 /api/books
+                response = await handleSearchBook(request, env);
+            } else if (path === '/borrowbooks' && method === 'POST') { // 旧路径，考虑迁移到 /api/books/borrow
+                response = await handleBorrowBook(request, env);
+            } else if (path === '/returnbooks' && method === 'PUT') { // 旧路径，考虑迁移到 /api/books/return
+                response = await handleReturnBook(request, env);
+            }
+
+            // 3. 图书馆管理子功能 (managebooks - 旧路径)
+            else if (path === '/managebooks' && method === 'GET') {
+                response = await handleAdminLibrary(request, env);
+            }
+
+            // 4. 管理员 - 用户管理 API (/api/admin/users/*)
             else if (path.startsWith('/api/admin/users')) {
                 const userIdMatch = path.match(/^\/api\/admin\/users\/([a-zA-Z0-9_-]+)$/);
                 if (method === 'GET') {
-                    response = userIdMatch ? await handleAdminGetUserById(request, env, userIdMatch[1]) : await handleAdminGetUsers(request, env);
-                } else if (method === 'POST' && !userIdMatch) response = await handleAdminCreateUser(request, env);
-                else if (method === 'PUT' && userIdMatch) response = await handleAdminUpdateUser(request, env, userIdMatch[1]);
-                else if (method === 'DELETE' && userIdMatch) response = await handleAdminDeleteUser(request, env, userIdMatch[1]);
-            }
-
-            // 5. Settings API
-            else if (path.startsWith('/api/settings/')) { // Public get single setting
-                const settingKeyFromPath = path.substring('/api/settings/'.length);
-                console.log(`[ROUTER /api/settings/] Path: "${path}", Extracted key: "${settingKeyFromPath}"`);
-                if (method === 'GET' && settingKeyFromPath && settingKeyFromPath.trim() !== "") { // 确保不为空
-                    response = await handleGetSiteSetting(request, env, settingKeyFromPath);
-                } else {
-                    console.warn(`[ROUTER /api/settings/] Invalid or missing settingKey: "${settingKeyFromPath}"`);
-                    response = createErrorResponse("Valid setting key is required in the path.", 400);
+                    response = userIdMatch ? await handleAdminGetUserById(request, env, userIdMatch[1]) 
+                                           : await handleAdminGetUsers(request, env);
+                } else if (method === 'POST' && path === '/api/admin/users') {
+                    response = await handleAdminCreateUser(request, env);
+                } else if (method === 'PUT' && userIdMatch) {
+                    response = await handleAdminUpdateUser(request, env, userIdMatch[1]);
+                } else if (method === 'DELETE' && userIdMatch) {
+                    response = await handleAdminDeleteUser(request, env, userIdMatch[1]);
                 }
-                // const settingKey = path.substring('/api/settings/'.length);
-                // if (method === 'GET' && settingKey) response = await handleGetSiteSetting(request, env, settingKey);
-            } else if (path.startsWith('/api/admin/settings')) { // Admin settings
-                const settingKeyMatch = path.match(/^\/api\/admin\/settings\/([a-zA-Z0-9_.-]+)$/);
-                if (method === 'GET' && !settingKeyMatch) response = await handleAdminGetAllSiteSettings(request, env);
-                else if (method === 'PUT' && settingKeyMatch) response = await handleAdminUpdateSiteSetting(request, env, settingKeyMatch[1]);
             }
 
-            // 6. Stats API
-            else if (path === '/api/admin/stats' && method === 'GET') response = await handleAdminGetStats(request, env);
-            else if (path === '/api/stats/top-borrowers' && method === 'GET') response = await handleGetTopBorrowers(request, env);
+            // 5. 网站设置 API
+            else if (path.startsWith('/api/settings/')) { // 公开获取单个设置
+                const settingKey = path.substring('/api/settings/'.length);
+                if (method === 'GET' && settingKey && settingKey.trim() !== "") {
+                    response = await handleGetSiteSetting(request, env, settingKey);
+                } else {
+                    response = createErrorResponse("Valid setting key required for GET /api/settings/:key.", 400);
+                }
+            } else if (path.startsWith('/api/admin/settings')) { // 管理员操作设置
+                const settingKeyMatch = path.match(/^\/api\/admin\/settings\/([a-zA-Z0-9_.-]+)$/);
+                if (method === 'GET' && path === '/api/admin/settings') { // GET all settings for admin
+                    response = await handleAdminGetAllSiteSettings(request, env);
+                } else if (method === 'PUT' && settingKeyMatch) { // PUT /api/admin/settings/:setting_key
+                    response = await handleAdminUpdateSiteSetting(request, env, settingKeyMatch[1]);
+                }
+            }
+            
+            // 6. 统计 API
+            else if (path === '/api/admin/stats' && method === 'GET') {
+                response = await handleAdminGetStats(request, env);
+            } else if (path === '/api/stats/top-borrowers' && method === 'GET') {
+                response = await handleGetTopBorrowers(request, env);
+            }
 
-            // 7. (未来) Blog API - 示例占位
-            // else if (path.startsWith('/api/blog/posts')) {
-            //    if (method === 'GET') response = await handleGetBlogPosts(request, env); // from ./handlers/blog.js
-            // }
-            // --- NEW: Blog API Routes ---
-            // Topics
-            else if (path === '/api/admin/blog/topics' && method === 'POST') { // Admin creates topic
+            // 7. 博客系统 API
+            // 7.1 博客话题
+            else if (path === '/api/admin/blog/topics' && method === 'POST') {
                 response = await handleAdminCreateTopic(request, env);
-            } else if (path === '/api/blog/topics' && method === 'GET') { // Public list topics
+            } else if (path === '/api/blog/topics' && method === 'GET') {
                 response = await handleGetTopics(request, env);
             }
-            // Book Search for Blog
-            else if (path === '/api/blog/search-books' && method === 'GET') { // User searches books while writing post
+            // 7.2 博客用书籍搜索 (简化版)
+            else if (path === '/api/blog/search-books' && method === 'GET') {
                 response = await handleBlogSearchBooks(request, env);
             }
-            // Blog Posts
-            else if (path === '/api/blog/posts' && method === 'POST') { // User creates post
-                response = await handleCreateBlogPost(request, env);
-            } else if (path === '/api/blog/posts' && method === 'GET') { // Public list posts
-                response = await handleGetBlogPosts(request, env);
-            } else if (path.startsWith('/api/blog/posts/')) {
-                const postIdMatch = path.match(/^\/api\/blog\/posts\/(\d+)$/); // Matches /api/blog/posts/{postId}
-                if (postIdMatch && method === 'GET') { // Public get single post
-                    response = await handleGetBlogPostById(request, env, postIdMatch[1]);
-                }
-                // Add PUT (edit) and DELETE routes here later
-            }
-            // --- Blog Posts Routes (Updated) ---
+            // 7.3 博客文章
             else if (path === '/api/blog/posts' && method === 'POST') {
                 response = await handleCreateBlogPost(request, env);
             } else if (path === '/api/blog/posts' && method === 'GET') {
                 response = await handleGetBlogPosts(request, env);
             } else if (path.startsWith('/api/blog/posts/')) {
-                const postIdMatch = path.match(/^\/api\/blog\/posts\/(\d+)$/); // For /:postId
-                const likeMatch = path.match(/^\/api\/blog\/posts\/(\d+)\/like$/); // For /:postId/like
+                const postIdSegment = path.substring('/api/blog/posts/'.length); // "123" or "123/like"
+                const segments = postIdSegment.split('/');
+                const postId = segments[0];
+                const action = segments[1]; // "like" or undefined
 
-                if (postIdMatch && method === 'GET') { // GET /api/blog/posts/:postId
-                    response = await handleGetBlogPostById(request, env, postIdMatch[1]);
-                } else if (postIdMatch && method === 'PUT') { // PUT /api/blog/posts/:postId
-                    response = await handleUpdateBlogPost(request, env, postIdMatch[1]);
-                } else if (postIdMatch && method === 'DELETE') { // DELETE /api/blog/posts/:postId
-                    response = await handleDeleteBlogPost(request, env, postIdMatch[1]);
-                } else if (likeMatch) { // Matches /api/blog/posts/{postId}/like
-                    const postId = likeMatch[1];
-                    if (method === 'POST') response = await handleLikeBlogPost(request, env, postId); // 新增点赞
-                    else if (method === 'DELETE') response = await handleUnlikeBlogPost(request, env, postId); // 新增取消点赞
+                if (postId && /^\d+$/.test(postId)) { // Valid numeric post ID
+                    if (action === 'like') {
+                        if (method === 'POST') response = await handleLikeBlogPost(request, env, postId);
+                        else if (method === 'DELETE') response = await handleUnlikeBlogPost(request, env, postId);
+                    } else if (!action) { // No action, refers to the post itself
+                        if (method === 'GET') response = await handleGetBlogPostById(request, env, postId);
+                        else if (method === 'PUT') response = await handleUpdateBlogPost(request, env, postId);
+                        else if (method === 'DELETE') response = await handleDeleteBlogPost(request, env, postId);
+                    }
                 }
-                
             }
+            
+            // --- End of API Routes ---
 
-
-            // Fallback for unhandled paths
+            // 如果没有匹配到任何已知路由
             if (!response) {
-                response = createErrorResponse("Endpoint not found.", 404);
+                console.warn(`[WORKER ROUTER] No route matched for ${method} ${path}`);
+                response = createErrorResponse(`Endpoint not found: ${method} ${path}`, 404);
             }
+
         } catch (e) {
-            // Catch any unhandled errors from handlers (though they should ideally handle their own)
-            console.error("Unhandled error in fetch handler:", e);
-            response = createErrorResponse("An unexpected server error occurred.", 500);
+            // 捕获所有在路由或 handler 中未被捕获的意外错误
+            console.error(`[WORKER ERROR] Unhandled exception for ${method} ${path}:`, e.message, e.stack);
+            response = createErrorResponse(`An unexpected server error occurred. Please try again later. Ray ID: ${request.headers.get('cf-ray') || 'N/A'}`, 500);
         }
 
-
-        // Apply CORS headers to the final response
+        // 为所有实际响应添加 CORS 头部
+        // 克隆响应以修改头部，因为 Response.headers 是不可变的
         const finalResponse = new Response(response.body, response);
-        finalResponse.headers.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*');
+        finalResponse.headers.set('Access-Control-Allow-Origin', request.headers.get('Origin') || '*'); // 生产中应指定具体源
         finalResponse.headers.set('Access-Control-Allow-Credentials', 'true');
-        // Add other headers if needed, like 'Vary: Origin' if origin is not '*'
+        // 如果你从 Worker 返回了自定义头部并希望前端 JS 能访问它们，需要在这里暴露
+        // finalResponse.headers.append('Access-Control-Expose-Headers', 'X-My-Custom-Header, X-Pagination-Total-Count');
         
         return finalResponse;
     },
