@@ -13,47 +13,46 @@ function generateSlug(name) {
         .replace(/-+$/, '');            // Trim - from end of text
 }
 
-export async function handleAdminCreateTopic(request, env) {
-    const adminVerification = await verifyAdmin(request, env);
-    if (!adminVerification.authorized) {
-        return createErrorResponse(adminVerification.error, 401);
-    }
-
+export async function handleGetTopics(request, env) {
     try {
-        const { name, description } = await request.json();
-        if (!name || typeof name !== 'string' || name.trim() === '') {
-            return createErrorResponse("Topic name is required and must be a non-empty string.", 400);
-        }
+        const { page, limit, offset } = getPaginationParams(request.url, 20); // defaultLimit 20
+        const url = new URL(request.url);
+        const searchTerm = url.searchParams.get('search');
+        
+        let queryParams = [];
+        let countWhereClause = "";
+        let dataWhereClause = "";
 
-        const slug = generateSlug(name);
-        const existingTopic = await env.DB.prepare("SELECT id FROM blog_topics WHERE name = ? OR slug = ?")
-            .bind(name.trim(), slug)
-            .first();
-
-        if (existingTopic) {
-            return createErrorResponse("A topic with this name or slug already exists.", 409);
+        if (searchTerm) {
+            countWhereClause = " WHERE name LIKE ?";
+            dataWhereClause = " WHERE t.name LIKE ?"; // Alias 't' for topics table
+            queryParams.push(`%${searchTerm}%`);
         }
         
-        const currentTime = new Date().toISOString().slice(0, 19).replace('T', ' ');
-        const { meta } = await env.DB.prepare(
-            "INSERT INTO blog_topics (name, slug, description, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
-        ).bind(name.trim(), slug, description || null, adminVerification.userId, currentTime, currentTime)
-          .run();
+        const countQuery = `SELECT COUNT(*) as total FROM blog_topics ${countWhereClause}`;
+        const countResult = await env.DB.prepare(countQuery).bind(...queryParams).first();
+        const totalItems = countResult ? countResult.total : 0;
 
-        if (meta && meta.last_row_id) {
-            const newTopic = await env.DB.prepare("SELECT * FROM blog_topics WHERE id = ?")
-                .bind(meta.last_row_id)
-                .first();
-            return new Response(JSON.stringify({ success: true, message: "Topic created successfully.", topic: newTopic }), { status: 201 });
-        } else {
-            return createErrorResponse("Failed to create topic.", 500);
-        }
+        // Add post_count to the query
+        const dataQuery = `
+            SELECT t.id, t.name, t.slug, t.description, 
+                   (SELECT COUNT(*) FROM blog_post_topics bpt WHERE bpt.topic_id = t.id) as post_count 
+            FROM blog_topics t 
+            ${dataWhereClause} 
+            ORDER BY t.name ASC LIMIT ? OFFSET ?`;
+        
+        // For data query, add limit and offset to params
+        const dataQueryParams = [...queryParams, limit, offset];
+        const { results: topics } = await env.DB.prepare(dataQuery).bind(...dataQueryParams).all();
+
+        return new Response(JSON.stringify(formatPaginatedResponse(topics || [], totalItems, page, limit)), { 
+            status: 200, 
+            headers: { 'Content-Type': 'application/json' } 
+        });
+
     } catch (error) {
-        console.error("Admin Create Topic Error:", error);
-        if (error.message.includes("UNIQUE constraint failed")) {
-            return createErrorResponse("Topic name or slug already exists (unique constraint).", 409);
-        }
-        return createErrorResponse("Server error: " + error.message, 500);
+        console.error("Get Topics Error:", error);
+        return createErrorResponse("Server error while fetching topics: " + error.message, 500);
     }
 }
 

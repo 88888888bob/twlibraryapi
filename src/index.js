@@ -142,11 +142,12 @@ export default {
                     response = await handleUpdateBlogPost(request, env, postIdMatch[1]);
                 } else if (postIdMatch && method === 'DELETE') { // DELETE /api/blog/posts/:postId
                     response = await handleDeleteBlogPost(request, env, postIdMatch[1]);
-                } else if (likeMatch && method === 'POST') { // POST /api/blog/posts/:postId/like
-                    response = await handleLikeBlogPost(request, env, likeMatch[1]);
-                } else if (likeMatch && method === 'DELETE') { // DELETE /api/blog/posts/:postId/like
-                    response = await handleUnlikeBlogPost(request, env, likeMatch[1]);
+                } else if (likeMatch) { // Matches /api/blog/posts/{postId}/like
+                    const postId = likeMatch[1];
+                    if (method === 'POST') response = await handleLikeBlogPost(request, env, postId); // 新增点赞
+                    else if (method === 'DELETE') response = await handleUnlikeBlogPost(request, env, postId); // 新增取消点赞
                 }
+                
             }
 
 
