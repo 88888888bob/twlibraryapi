@@ -4,25 +4,29 @@
 import { createErrorResponse } from './utils/responseHelper.js';
 
 // --- Handler 导入 ---
+// 认证
 import { 
     handleRegister, 
     handleLogin, 
     handleGetUser, 
-    handlePostUser // 假设 handlePostUser 仍用于管理员验证或特定场景
+    handlePostUser 
 } from './handlers/auth.js';
 
+// 图书 (管理员和博客用)
 import { 
     handleAddBook, 
     handleEditBook, 
     handleDeleteBook, 
-    handleSearchBook, // 这是管理员/登录用户的图书搜索
+    handleSearchBook,       // 管理员/登录用户的图书搜索
     handleBorrowBook, 
     handleReturnBook,
-    handleBlogSearchBooks // 这是博客模块专用的简化版图书搜索
+    handleBlogSearchBooks   // 博客模块专用的简化版图书搜索
 } from './handlers/books.js';
 
+// 图书馆管理 (旧路径)
 import { handleAdminLibrary } from './handlers/libraryAdmin.js';
 
+// 用户管理 (Admin)
 import { 
     handleAdminGetUsers, 
     handleAdminGetUserById, 
@@ -31,22 +35,28 @@ import {
     handleAdminDeleteUser 
 } from './handlers/userAdmin.js';
 
+// 统计
 import { 
     handleGetTopBorrowers, 
     handleAdminGetStats 
 } from './handlers/stats.js';
 
+// 网站设置
 import { 
     handleGetSiteSetting, 
     handleAdminGetAllSiteSettings, 
     handleAdminUpdateSiteSetting 
 } from './handlers/settings.js';
 
+// 博客话题 (确保只导入一次)
 import { 
     handleAdminCreateTopic, // 管理员创建话题
-    handleGetTopics         // 公开获取话题列表
+    handleGetTopics,        // 公开获取话题列表
+    handleAdminUpdateTopic, // 管理员编辑话题 (来自阶段 3)
+    handleAdminDeleteTopic  // 管理员删除话题 (来自阶段 3)
 } from './handlers/blogTopics.js';
 
+// 博客文章 (确保只导入一次)
 import { 
     handleCreateBlogPost, 
     handleGetBlogPosts, 
@@ -54,20 +64,10 @@ import {
     handleUpdateBlogPost,     // 编辑文章
     handleDeleteBlogPost,     // 删除文章
     handleLikeBlogPost,       // 点赞文章
-    handleUnlikeBlogPost      // 取消点赞文章
+    handleUnlikeBlogPost,     // 取消点赞文章
+    handleAdminUpdatePostStatus // 管理员修改文章状态 (来自阶段 3)
 } from './handlers/blogPosts.js';
 
-import { 
-    handleAdminCreateTopic, handleGetTopics,
-    handleAdminUpdateTopic, handleAdminDeleteTopic // 新增
-} from './handlers/blogTopics.js';
-
-import { 
-    handleCreateBlogPost, handleGetBlogPosts, handleGetBlogPostById,
-    handleUpdateBlogPost, handleDeleteBlogPost, 
-    handleLikeBlogPost, handleUnlikeBlogPost,
-    handleAdminUpdatePostStatus // 新增
-} from './handlers/blogPosts.js';
 
 export default {
     async fetch(request, env, ctx) {
