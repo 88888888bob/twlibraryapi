@@ -109,7 +109,6 @@ export default {
             else if (path === '/api/admin/blog/topics' && method === 'POST') { // Admin creates topic
                 response = await handleAdminCreateTopic(request, env);
             } else if (path === '/api/blog/topics' && method === 'GET') { // Public list topics
-                console.log(`[ROUTER] Matched /api/blog/topics GET, calling handleGetTopics`);
                 response = await handleGetTopics(request, env);
             }
             // Book Search for Blog
