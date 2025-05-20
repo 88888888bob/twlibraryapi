@@ -128,3 +128,134 @@ export async function handleGetTopics(request, env) {
 // export async function handleAdminUpdateTopic(request, env, topicId) { ... }
 // export async function handleAdminDeleteTopic(request, env, topicId) { ... }
 // export async function handleGetTopicByIdOrSlug(request, env, idOrSlug) { ... }
+
+export async function handleAdminUpdateTopic(request, env, topicId) {
+    const adminVerification = await verifyAdmin(request, env);
+    if (!adminVerification.authorized) {
+        return createErrorResponse(adminVerification.error, 401);
+    }
+
+    if (!topicId || !/^\d+$/.test(topicId)) {
+        return createErrorResponse("Invalid Topic ID format.", 400);
+    }
+    const numericTopicId = parseInt(topicId);
+
+    try {
+        const existingTopic = await env.DB.prepare("SELECT * FROM blog_topics WHERE id = ?")
+            .bind(numericTopicId).first();
+        if (!existingTopic) {
+            return createErrorResponse("Topic not found.", 404);
+        }
+
+        const body = await request.json();
+        const { name, description, slug: newSlugInput } = body; // Admin might want to manually set slug
+
+        const updateFields = [];
+        const params = [];
+        let finalSlug = existingTopic.slug;
+
+        if (name !== undefined && name.trim() !== '' && name.trim() !== existingTopic.name) {
+            const trimmedName = name.trim();
+            updateFields.push("name = ?"); 
+            params.push(trimmedName);
+            // If slug is not provided by admin, regenerate based on new name
+            if (newSlugInput === undefined) { 
+                finalSlug = generateSlug(trimmedName);
+            }
+        }
+
+        if (newSlugInput !== undefined && newSlugInput.trim() !== '' && newSlugInput.trim() !== existingTopic.slug) {
+            finalSlug = generateSlug(newSlugInput.trim()); // Ensure admin provided slug is also processed
+        }
+        
+        // Check for slug/name uniqueness if they changed
+        if (finalSlug !== existingTopic.slug || (name !== undefined && name.trim() !== existingTopic.name)) {
+            const conflictCheck = await env.DB.prepare(
+                "SELECT id FROM blog_topics WHERE (slug = ? OR name = ?) AND id != ?"
+            ).bind(finalSlug, name ? name.trim() : existingTopic.name, numericTopicId).first();
+            if (conflictCheck) {
+                return createErrorResponse("Another topic with this name or slug already exists.", 409);
+            }
+            updateFields.push("slug = ?");
+            params.push(finalSlug);
+        }
+
+
+        if (description !== undefined && description !== existingTopic.description) {
+            updateFields.push("description = ?"); 
+            params.push(description || null);
+        }
+
+        if (updateFields.length === 0) {
+            return createErrorResponse("No changes detected to update.", 304); // Or 200 with message
+        }
+
+        updateFields.push("updated_at = ?");
+        params.push(new Date().toISOString().slice(0, 19).replace('T', ' '));
+        params.push(numericTopicId);
+
+        const query = `UPDATE blog_topics SET ${updateFields.join(", ")} WHERE id = ?`;
+        const { success, meta } = await env.DB.prepare(query).bind(...params).run();
+
+        if (success && meta.changes > 0) {
+            const updatedTopic = await env.DB.prepare("SELECT * FROM blog_topics WHERE id = ?")
+                .bind(numericTopicId).first();
+            return new Response(JSON.stringify({ success: true, message: "Topic updated successfully.", topic: updatedTopic }), { status: 200 });
+        } else if (meta.changes === 0) {
+            return createErrorResponse("No changes made to the topic.", 304); // Or 200 if only updated_at changed
+        } else {
+            return createErrorResponse("Failed to update topic.", 500);
+        }
+
+    } catch (error) {
+        console.error(`Admin Update Topic (ID: ${topicId}) Error:`, error.message, error.stack);
+        if (error instanceof SyntaxError && error.message.includes("JSON")) {
+            return createErrorResponse("Invalid request body: Malformed JSON.", 400);
+        }
+        if (error.message.includes("UNIQUE constraint failed")) {
+            return createErrorResponse("Topic name or slug conflict (unique constraint).", 409);
+        }
+        return createErrorResponse("Server error during topic update: " + error.message, 500);
+    }
+}
+
+
+export async function handleAdminDeleteTopic(request, env, topicId) {
+    const adminVerification = await verifyAdmin(request, env);
+    if (!adminVerification.authorized) {
+        return createErrorResponse(adminVerification.error, 401);
+    }
+
+    if (!topicId || !/^\d+$/.test(topicId)) {
+        return createErrorResponse("Invalid Topic ID format.", 400);
+    }
+    const numericTopicId = parseInt(topicId);
+
+    try {
+        const existingTopic = await env.DB.prepare("SELECT id FROM blog_topics WHERE id = ?")
+            .bind(numericTopicId).first();
+        if (!existingTopic) {
+            return createErrorResponse("Topic not found.", 404);
+        }
+
+        // Before deleting the topic, remove associations from blog_post_topics
+        await env.DB.prepare("DELETE FROM blog_post_topics WHERE topic_id = ?")
+            .bind(numericTopicId).run();
+
+        // Then delete the topic itself
+        const { success, meta } = await env.DB.prepare("DELETE FROM blog_topics WHERE id = ?")
+            .bind(numericTopicId).run();
+
+        if (success && meta.changes > 0) {
+            return new Response(JSON.stringify({ success: true, message: "Topic and its associations deleted successfully." }), { status: 200 });
+            // Or 204 No Content
+        } else {
+            // This might happen if the topic was deleted by another request just before this one
+            return createErrorResponse("Failed to delete topic (it might have already been deleted or an error occurred).", 404);
+        }
+
+    } catch (error) {
+        console.error(`Admin Delete Topic (ID: ${topicId}) Error:`, error.message, error.stack);
+        return createErrorResponse("Server error during topic deletion: " + error.message, 500);
+    }
+}

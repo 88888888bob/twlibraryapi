@@ -57,6 +57,17 @@ import {
     handleUnlikeBlogPost      // 取消点赞文章
 } from './handlers/blogPosts.js';
 
+import { 
+    handleAdminCreateTopic, handleGetTopics,
+    handleAdminUpdateTopic, handleAdminDeleteTopic // 新增
+} from './handlers/blogTopics.js';
+
+import { 
+    handleCreateBlogPost, handleGetBlogPosts, handleGetBlogPostById,
+    handleUpdateBlogPost, handleDeleteBlogPost, 
+    handleLikeBlogPost, handleUnlikeBlogPost,
+    handleAdminUpdatePostStatus // 新增
+} from './handlers/blogPosts.js';
 
 export default {
     async fetch(request, env, ctx) {
@@ -162,7 +173,14 @@ export default {
             // 7.1 博客话题
             else if (path === '/api/admin/blog/topics' && method === 'POST') {
                 response = await handleAdminCreateTopic(request, env);
-            } else if (path === '/api/blog/topics' && method === 'GET') {
+            } else if (path.startsWith('/api/admin/blog/topics/')) {
+                const topicIdMatch = path.match(/^\/api\/admin\/blog\/topics\/(\d+)$/);
+                if (topicIdMatch) {
+                    const topicId = topicIdMatch[1];
+                    if (method === 'PUT') response = await handleAdminUpdateTopic(request, env, topicId); // 新增
+                    else if (method === 'DELETE') response = await handleAdminDeleteTopic(request, env, topicId); // 新增
+                }
+            } else if (path === '/api/blog/topics' && method === 'GET') { // 公开列表
                 response = await handleGetTopics(request, env);
             }
             // 7.2 博客用书籍搜索 (简化版)
@@ -175,16 +193,18 @@ export default {
             } else if (path === '/api/blog/posts' && method === 'GET') {
                 response = await handleGetBlogPosts(request, env);
             } else if (path.startsWith('/api/blog/posts/')) {
-                const postIdSegment = path.substring('/api/blog/posts/'.length); // "123" or "123/like"
+                const postIdSegment = path.substring('/api/blog/posts/'.length);
                 const segments = postIdSegment.split('/');
                 const postId = segments[0];
-                const action = segments[1]; // "like" or undefined
+                const action = segments[1]; 
 
-                if (postId && /^\d+$/.test(postId)) { // Valid numeric post ID
+                if (postId && /^\d+$/.test(postId)) {
                     if (action === 'like') {
                         if (method === 'POST') response = await handleLikeBlogPost(request, env, postId);
                         else if (method === 'DELETE') response = await handleUnlikeBlogPost(request, env, postId);
-                    } else if (!action) { // No action, refers to the post itself
+                    } else if (action === 'status' && path.startsWith(`/api/admin/blog/posts/${postId}/status`)) { // 管理员修改状态
+                         if (method === 'PUT') response = await handleAdminUpdatePostStatus(request, env, postId); // 新增
+                    } else if (!action) { // /api/blog/posts/:postId
                         if (method === 'GET') response = await handleGetBlogPostById(request, env, postId);
                         else if (method === 'PUT') response = await handleUpdateBlogPost(request, env, postId);
                         else if (method === 'DELETE') response = await handleDeleteBlogPost(request, env, postId);

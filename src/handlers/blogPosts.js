@@ -524,3 +524,76 @@ export async function handleUnlikeBlogPost(request, env, postId) {
         return createErrorResponse("Server error while unliking post: " + error.message, 500);
     }
 }
+
+export async function handleAdminUpdatePostStatus(request, env, postId) {
+    const adminVerification = await verifyAdmin(request, env); // 必须是管理员
+    if (!adminVerification.authorized) {
+        return createErrorResponse(adminVerification.error, 401);
+    }
+
+    if (!postId || !/^\d+$/.test(postId)) {
+        return createErrorResponse("Invalid Post ID format.", 400);
+    }
+    const numericPostId = parseInt(postId);
+
+    try {
+        const post = await env.DB.prepare("SELECT id, status, published_at FROM blog_posts WHERE id = ?")
+            .bind(numericPostId).first();
+        if (!post) {
+            return createErrorResponse("Post not found.", 404);
+        }
+
+        const { status: newStatus } = await request.json();
+        const allowedAdminStatuses = ['draft', 'pending_review', 'published', 'archived'];
+
+        if (!newStatus || !allowedAdminStatuses.includes(newStatus)) {
+            return createErrorResponse(`Invalid status value. Allowed statuses are: ${allowedAdminStatuses.join(', ')}.`, 400);
+        }
+
+        if (newStatus === post.status) {
+            return createErrorResponse("Post is already in the requested status.", 304); // Or 200 with message
+        }
+
+        const updateFields = ["status = ?"];
+        const params = [newStatus];
+        const currentTime = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+        if (newStatus === 'published' && !post.published_at) { // First time publishing
+            updateFields.push("published_at = ?");
+            params.push(currentTime);
+        } else if (newStatus !== 'published' && post.status === 'published' && post.published_at) {
+            // If unpublishing a published post, admin might choose to clear published_at or not
+            // For now, we don't clear it automatically. If needed, can add a flag in request.
+        }
+        
+        updateFields.push("updated_at = ?");
+        params.push(currentTime);
+        params.push(numericPostId);
+
+        const query = `UPDATE blog_posts SET ${updateFields.join(", ")} WHERE id = ?`;
+        const { success, meta } = await env.DB.prepare(query).bind(...params).run();
+
+        if (success && meta.changes > 0) {
+            const updatedPost = await env.DB.prepare("SELECT * FROM blog_posts WHERE id = ?").bind(numericPostId).first();
+             // Fetch topics for the updated post to return complete data
+            const topics = await getPostTopics(env, numericPostId);
+            const finalPost = { ...updatedPost, topics: topics, author_username: updatedPost.username };
+
+
+            return new Response(JSON.stringify({ success: true, message: `Post status updated to '${newStatus}'.`, post: finalPost }), { status: 200 });
+        } else if (meta.changes === 0 && newStatus !== post.status) {
+            // This case should ideally not be hit if the status check above is correct,
+            // but as a fallback if DB didn't update for some reason.
+            return createErrorResponse("Failed to update post status (no rows affected).", 500);
+        } else { // meta.changes === 0 because status was already the same (caught above)
+            return createErrorResponse("Failed to update post status.", 500);
+        }
+
+    } catch (error) {
+        console.error(`Admin Update Post Status (ID: ${postId}) Error:`, error.message, error.stack);
+        if (error instanceof SyntaxError && error.message.includes("JSON")) {
+            return createErrorResponse("Invalid request body: Malformed JSON.", 400);
+        }
+        return createErrorResponse("Server error during status update: " + error.message, 500);
+    }
+}
