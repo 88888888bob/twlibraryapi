@@ -14,49 +14,6 @@ function generateSlug(name) {
 }
 
 export async function handleGetTopics(request, env) {
-    try {
-        const { page, limit, offset } = getPaginationParams(request.url, 20); // defaultLimit 20
-        const url = new URL(request.url);
-        const searchTerm = url.searchParams.get('search');
-        
-        let queryParams = [];
-        let countWhereClause = "";
-        let dataWhereClause = "";
-
-        if (searchTerm) {
-            countWhereClause = " WHERE name LIKE ?";
-            dataWhereClause = " WHERE t.name LIKE ?"; // Alias 't' for topics table
-            queryParams.push(`%${searchTerm}%`);
-        }
-        
-        const countQuery = `SELECT COUNT(*) as total FROM blog_topics ${countWhereClause}`;
-        const countResult = await env.DB.prepare(countQuery).bind(...queryParams).first();
-        const totalItems = countResult ? countResult.total : 0;
-
-        // Add post_count to the query
-        const dataQuery = `
-            SELECT t.id, t.name, t.slug, t.description, 
-                   (SELECT COUNT(*) FROM blog_post_topics bpt WHERE bpt.topic_id = t.id) as post_count 
-            FROM blog_topics t 
-            ${dataWhereClause} 
-            ORDER BY t.name ASC LIMIT ? OFFSET ?`;
-        
-        // For data query, add limit and offset to params
-        const dataQueryParams = [...queryParams, limit, offset];
-        const { results: topics } = await env.DB.prepare(dataQuery).bind(...dataQueryParams).all();
-
-        return new Response(JSON.stringify(formatPaginatedResponse(topics || [], totalItems, page, limit)), { 
-            status: 200, 
-            headers: { 'Content-Type': 'application/json' } 
-        });
-
-    } catch (error) {
-        console.error("Get Topics Error:", error);
-        return createErrorResponse("Server error while fetching topics: " + error.message, 500);
-    }
-}
-
-export async function handleGetTopics(request, env) {
     // No auth needed for public listing for now, can add verifyUser if needed
     try {
         const { page, limit, offset } = getPaginationParams(request.url, 20); // Default 20 topics per page
