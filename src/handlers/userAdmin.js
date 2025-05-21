@@ -100,8 +100,15 @@ export async function handleAdminUpdateUser(request, env, userId) {
     if (!adminVerification.authorized) return createErrorResponse(adminVerification.error, 401);
     if (!userId) return createErrorResponse("User ID required.", 400);
     try {
-        const { results: userExists } = await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(userId).first();
-        if (!userExists) return createErrorResponse("User not found.", 404);
+       console.log(`[handleAdminUpdateUser] Attempting to update user ID: ${numericUserId}`);
+
+        const userExists = await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(numericUserId).first();
+        console.log(`[handleAdminUpdateUser] Initial check for user ${numericUserId}:`, JSON.stringify(userExists));
+
+        if (!userExists) {
+            console.warn(`[handleAdminUpdateUser] User ${numericUserId} not found during initial check.`);
+            return createErrorResponse("User not found.", 404);
+        }
 
         const { username, email, role, newPassword } = await request.json();
         const updateFields = [];
@@ -127,11 +134,14 @@ export async function handleAdminUpdateUser(request, env, userId) {
         params.push(userId);
 
         const query = `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`;
-        const { success, meta } = await env.DB.prepare(query).bind(...params).run();
+        console.log(`[handleAdminUpdateUser] Update query for user ${numericUserId}: ${updateQuery}`);
+        console.log(`[handleAdminUpdateUser] Update params for user ${numericUserId}:`, JSON.stringify(params));
+        const { success, meta } = await env.DB.prepare(updateQuery).bind(...params).run();
+        console.log(`[handleAdminUpdateUser] Update result for user ${numericUserId}: success=${success}, meta=`, JSON.stringify(meta));
 
         if (success && meta.changes > 0) {
-            const { results: updatedUser } = await env.DB.prepare("SELECT id, username, email, role, created_at FROM users WHERE id = ?").bind(userId).first();
-            return new Response(JSON.stringify({ success: true, message: 'User updated.', user: updatedUser }), { status: 200 });
+            const updatedUser = await env.DB.prepare("SELECT id, username, email, role, created_at FROM users WHERE id = ?").bind(numericUserId).first();
+            console.log(`[handleAdminUpdateUser] Refetched user ${numericUserId} after update:`, JSON.stringify(updatedUser));
         } else if (meta.changes === 0) {
             return createErrorResponse('No changes made to user.', 304);
         } else {
