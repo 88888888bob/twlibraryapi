@@ -65,7 +65,8 @@ import {
     handleDeleteBlogPost,     // 删除文章
     handleLikeBlogPost,       // 点赞文章
     handleUnlikeBlogPost,     // 取消点赞文章
-    handleAdminUpdatePostStatus // 管理员修改文章状态 (来自阶段 3)
+    handleAdminUpdatePostStatus, // 管理员修改文章状态 (来自阶段 3)
+    handleAdminTogglePostFeature // 管理员推荐/取消推荐文章 (来自阶段 3)
 } from './handlers/blogPosts.js';
 
 

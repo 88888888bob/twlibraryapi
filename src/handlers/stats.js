@@ -39,7 +39,8 @@ export async function handleAdminGetStats(request, env) {
             env.DB.prepare("SELECT COUNT(*) as count FROM users"),
             env.DB.prepare("SELECT COUNT(*) as count FROM borrowed_books WHERE returned = 0"),
             env.DB.prepare("SELECT COUNT(*) as count FROM borrowed_books WHERE due_date < date('now') AND returned = 0"),
-            env.DB.prepare("SELECT COUNT(*) as count FROM users WHERE created_at >= date('now', '-7 days')")
+            env.DB.prepare("SELECT COUNT(*) as count FROM users WHERE created_at >= date('now', '-7 days')"),
+            env.DB.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'pending_review'") // <--- 新增
         ]);
         
         const stats = {
@@ -48,6 +49,7 @@ export async function handleAdminGetStats(request, env) {
             currentBorrows: counts[2].results[0]?.count || 0,
             overdueBorrows: counts[3].results[0]?.count || 0,
             newUsersLast7Days: counts[4].results[0]?.count || 0,
+            pendingReviewPosts: counts[5].results[0]?.count || 0, // <--- 新增
         };
         return new Response(JSON.stringify({ success: true, stats }), { status: 200 });
     } catch (error) {

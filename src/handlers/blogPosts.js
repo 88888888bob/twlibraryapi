@@ -604,3 +604,43 @@ export async function handleAdminUpdatePostStatus(request, env, postId) {
         return createErrorResponse("Server error during status update: " + error.message, 500);
     }
 }
+
+export async function handleAdminTogglePostFeature(request, env, postId) {
+    const adminVerification = await verifyAdmin(request, env);
+    if (!adminVerification.authorized) {
+        return createErrorResponse(adminVerification.error, 401);
+    }
+    if (!postId || !/^\d+$/.test(postId)) {
+        return createErrorResponse("Invalid Post ID format.", 400);
+    }
+    const numericPostId = parseInt(postId);
+
+    try {
+        const post = await env.DB.prepare("SELECT id, is_featured FROM blog_posts WHERE id = ?")
+            .bind(numericPostId).first();
+        if (!post) {
+            return createErrorResponse("Post not found.", 404);
+        }
+
+        const newFeaturedStatus = !post.is_featured; // 切换状态
+        // 如果使用 priority，逻辑会更复杂，可能需要设置一个非零值或 0
+        
+        const { success, meta } = await env.DB.prepare(
+            "UPDATE blog_posts SET is_featured = ?, updated_at = STRFTIME('%Y-%m-%d %H:%M:%S', 'now', 'localtime') WHERE id = ?"
+        ).bind(newFeaturedStatus ? 1 : 0, numericPostId).run();
+
+        if (success && meta.changes > 0) {
+            return new Response(JSON.stringify({ 
+                success: true, 
+                message: `Post ${newFeaturedStatus ? 'featured' : 'unfeatured'} successfully.`,
+                is_featured: newFeaturedStatus
+            }), { status: 200 });
+        } else {
+            return createErrorResponse("Failed to update post feature status.", 500);
+        }
+    } catch (error) {
+        console.error(`Admin Toggle Post Feature (ID: ${postId}) Error:`, error.message, error.stack);
+        return createErrorResponse("Server error: " + error.message, 500);
+    }
+}
+
