@@ -68,30 +68,86 @@ export async function handleAdminGetUserById(request, env, userId) {
 
 export async function handleAdminCreateUser(request, env) {
     const adminVerification = await verifyAdmin(request, env);
-    if (!adminVerification.authorized) return createErrorResponse(adminVerification.error, 401);
+    if (!adminVerification.authorized) {
+        return createErrorResponse(adminVerification.error, adminVerification.error.startsWith('Unauthorized') ? 401 : 403);
+    }
+
     try {
         const { email, password, username, role } = await request.json();
-        if (!email || !password || !username || !role) return createErrorResponse("All fields required.", 400);
-        if (!['student', 'teacher', 'admin'].includes(role)) return createErrorResponse("Invalid role.", 400);
-        if (!email.includes('@')) return createErrorResponse('Invalid email format.', 400);
 
-        const { results: existingUser } = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
-        if (existingUser) return createErrorResponse("Email already exists.", 409);
+        // 基本输入验证
+        if (!email || !password || !username || !role) {
+            return createErrorResponse("Email, password, username, and role are required.", 400);
+        }
+        if (!['student', 'teacher', 'admin'].includes(role)) {
+            return createErrorResponse("Invalid role provided. Allowed roles are: student, teacher, admin.", 400);
+        }
+        if (typeof email !== 'string' || !email.includes('@')) { // 简单邮箱格式检查
+            return createErrorResponse('Invalid email format.', 400);
+        }
+        if (typeof password !== 'string' || password.length < 6) { // 简单密码长度检查
+            return createErrorResponse('Password must be at least 6 characters long.', 400);
+        }
+        if (typeof username !== 'string' || username.trim().length < 3) {
+            return createErrorResponse('Username must be at least 3 characters long.', 400);
+        }
+
+
+        console.log(`[handleAdminCreateUser] Attempting to create user with email: ${email}`);
+
+        // 检查 Email 是否已存在 - 正确处理 .first()
+        const existingUser = await env.DB.prepare(
+            "SELECT id FROM users WHERE email = ?"
+        ).bind(email).first(); // .first() 返回用户对象或 null
+
+        console.log(`[handleAdminCreateUser] Check for existing email ${email}:`, JSON.stringify(existingUser));
+
+        if (existingUser) { // 如果 existingUser 不是 null，说明 email 已存在
+            console.warn(`[handleAdminCreateUser] Email ${email} already exists.`);
+            return createErrorResponse("Email already exists.", 409); // 409 Conflict
+        }
         
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const { meta } = await env.DB.prepare("INSERT INTO users (email, username, password, role) VALUES (?, ?, ?, ?)")
-            .bind(email, username, hashedPassword, role).run();
+        // （可选）检查 Username 是否已存在 (如果你的 users 表 username 列有 UNIQUE 约束)
+        // const existingUsername = await env.DB.prepare("SELECT id FROM users WHERE username = ?").bind(username).first();
+        // if (existingUsername) {
+        //     return createErrorResponse("Username already exists.", 409);
+        // }
 
-        if (meta?.last_row_id) {
-            const newUser = { id: meta.last_row_id, email, username, role };
-            return new Response(JSON.stringify({ success: true, message: 'User created.', user: newUser }), { status: 201 });
+        const hashedPassword = await bcrypt.hash(password, 10); // bcryptjs 会自动处理盐
+        const currentTime = new Date().toISOString().slice(0, 19).replace('T', ' '); // YYYY-MM-DD HH:MM:SS
+
+        const { meta } = await env.DB.prepare(
+            "INSERT INTO users (email, username, password, role, created_at) VALUES (?, ?, ?, ?, ?)"
+        ).bind(email, username.trim(), hashedPassword, role, currentTime).run();
+
+        if (meta && meta.last_row_id) {
+            const newUser = { 
+                id: meta.last_row_id, 
+                email: email, 
+                username: username.trim(), 
+                role: role,
+                created_at: currentTime // 返回创建时间
+            };
+            console.log(`[handleAdminCreateUser] User created successfully with ID: ${newUser.id}`);
+            return new Response(JSON.stringify({ success: true, message: 'User created successfully.', user: newUser }), { 
+                status: 201, // 201 Created
+                headers: { 'Content-Type': 'application/json' } 
+            });
         } else {
-            return createErrorResponse('Failed to create user.', 500);
+            console.error('[handleAdminCreateUser] Failed to create user, D1 meta did not return last_row_id or success was false:', meta);
+            return createErrorResponse('Failed to create user due to a database error.', 500);
         }
     } catch (error) {
-        console.error('Admin Create User Error:', error);
-        if (error.message?.includes('UNIQUE constraint failed')) return createErrorResponse('Create failed (unique constraint).', 409);
-        return createErrorResponse('Server Error: ' + error.message, 500);
+        console.error('Admin Create User Error:', error.message, error.stack);
+        if (error instanceof SyntaxError && error.message.includes("JSON")) {
+            return createErrorResponse("Invalid request body: Malformed JSON.", 400);
+        }
+        // D1 UNIQUE constraint failed 错误通常包含 "constraint failed" 或 "UNIQUE"
+        if (error.message && (error.message.toUpperCase().includes("UNIQUE CONSTRAINT FAILED") || error.message.toUpperCase().includes("CONSTRAINT FAILED")) ) {
+            // 需要更精确地判断是哪个字段冲突，但通常是 email 或 username
+            return createErrorResponse('Failed to create user: Email or Username already exists.', 409);
+        }
+        return createErrorResponse(`Server Error: ${error.message}`, 500);
     }
 }
 
