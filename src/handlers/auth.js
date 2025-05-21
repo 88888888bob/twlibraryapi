@@ -78,7 +78,7 @@ export async function handleLogin(request, env) {
 
         // Cloudflare Workers 设置 Cookie 的标准方式是直接构建 Set-Cookie 头部字符串
         // `serialize` 函数主要用于 Node.js 环境，虽然它可能在 Workers 中工作，但不是首选。
-        let cookieString = `${COOKIE_NAME}=${sessionId}; Max-Age=${24 * 60 * 60}; Path=/; HttpOnly; Secure; SameSite=Lax;`;
+        let cookieString = `${COOKIE_NAME}=${sessionId}; Max-Age=${24 * 60 * 60}; Path=/; HttpOnly; Secure; SameSite=None;`;
         // 或 SameSite=None;// 如果希望跨子域，Domain 可以设置为 .bob666.eu.org (假设这是你的主域)
         // 如果是 SameSite=None，则必须 Secure
 
