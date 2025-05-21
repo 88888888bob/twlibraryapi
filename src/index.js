@@ -170,45 +170,64 @@ export default {
                 response = await handleGetTopBorrowers(request, env);
             }
 
-            // 7. 博客系统 API
-            // 7.1 博客话题
-            else if (path === '/api/admin/blog/topics' && method === 'POST') {
+            // 7.1 博客话题 (管理员和公开)
+            if (path === '/api/admin/blog/topics' && method === 'POST') {
                 response = await handleAdminCreateTopic(request, env);
-            } else if (path.startsWith('/api/admin/blog/topics/')) {
+            } else if (path.startsWith('/api/admin/blog/topics/')) { // 管理员编辑/删除话题
                 const topicIdMatch = path.match(/^\/api\/admin\/blog\/topics\/(\d+)$/);
                 if (topicIdMatch) {
                     const topicId = topicIdMatch[1];
-                    if (method === 'PUT') response = await handleAdminUpdateTopic(request, env, topicId); // 新增
-                    else if (method === 'DELETE') response = await handleAdminDeleteTopic(request, env, topicId); // 新增
+                    if (method === 'PUT') response = await handleAdminUpdateTopic(request, env, topicId);
+                    else if (method === 'DELETE') response = await handleAdminDeleteTopic(request, env, topicId);
                 }
             } else if (path === '/api/blog/topics' && method === 'GET') { // 公开列表
                 response = await handleGetTopics(request, env);
             }
-            // 7.2 博客用书籍搜索 (简化版)
+
+            // 7.2 博客用书籍搜索 (简化版，用户登录后)
             else if (path === '/api/blog/search-books' && method === 'GET') {
                 response = await handleBlogSearchBooks(request, env);
             }
-            // 7.3 博客文章
-            else if (path === '/api/blog/posts' && method === 'POST') {
+            
+            // 7.3 管理员专属博客文章操作 (路径以 /api/admin/blog/posts/ 开头)
+            else if (path.startsWith('/api/admin/blog/posts/')) {
+                const adminPostStatusMatch = path.match(/^\/api\/admin\/blog\/posts\/(\d+)\/status$/);
+                const adminPostFeatureMatch = path.match(/^\/api\/admin\/blog\/posts\/(\d+)\/feature$/);
+                // 未来可能还有管理员直接编辑/删除任何帖子的特定路径，如果不想复用 /api/blog/posts/:postId
+
+                if (adminPostStatusMatch && method === 'PUT') {
+                    console.log(`[ROUTER] Matched PUT /api/admin/blog/posts/:postId/status, ID: ${adminPostStatusMatch[1]}`);
+                    response = await handleAdminUpdatePostStatus(request, env, adminPostStatusMatch[1]);
+                } else if (adminPostFeatureMatch && method === 'POST') { // 假设推荐是 POST
+                    console.log(`[ROUTER] Matched POST /api/admin/blog/posts/:postId/feature, ID: ${adminPostFeatureMatch[1]}`);
+                    response = await handleAdminTogglePostFeature(request, env, adminPostFeatureMatch[1]);
+                }
+                // 如果有其他 /api/admin/blog/posts/ 子路径，在这里添加 else if
+            }
+
+            // 7.4 公开/用户博客文章操作 (路径以 /api/blog/posts/ 开头)
+            else if (path === '/api/blog/posts' && method === 'POST') { // 创建文章
+                console.log(`[ROUTER] Matched POST /api/blog/posts`);
                 response = await handleCreateBlogPost(request, env);
-            } else if (path === '/api/blog/posts' && method === 'GET') {
+            } else if (path === '/api/blog/posts' && method === 'GET') { // 获取文章列表
+                console.log(`[ROUTER] Matched GET /api/blog/posts`);
                 response = await handleGetBlogPosts(request, env);
-            } else if (path.startsWith('/api/blog/posts/')) {
+            } else if (path.startsWith('/api/blog/posts/')) { // 处理 /api/blog/posts/:postId 和 /api/blog/posts/:postId/like
                 const postIdSegment = path.substring('/api/blog/posts/'.length);
                 const segments = postIdSegment.split('/');
                 const postId = segments[0];
-                const action = segments[1]; 
+                const action = segments.length > 1 ? segments[1] : null;
 
                 if (postId && /^\d+$/.test(postId)) {
                     if (action === 'like') {
+                        console.log(`[ROUTER] Matched /api/blog/posts/:postId/like, ID: ${postId}, Method: ${method}`);
                         if (method === 'POST') response = await handleLikeBlogPost(request, env, postId);
                         else if (method === 'DELETE') response = await handleUnlikeBlogPost(request, env, postId);
-                    } else if (action === 'status' && path.startsWith(`/api/admin/blog/posts/${postId}/status`)) { // 管理员修改状态
-                         if (method === 'PUT') response = await handleAdminUpdatePostStatus(request, env, postId); // 新增
-                    } else if (!action) { // /api/blog/posts/:postId
+                    } else if (!action) { // 路径是 /api/blog/posts/:postId
+                        console.log(`[ROUTER] Matched /api/blog/posts/:postId, ID: ${postId}, Method: ${method}`);
                         if (method === 'GET') response = await handleGetBlogPostById(request, env, postId);
-                        else if (method === 'PUT') response = await handleUpdateBlogPost(request, env, postId);
-                        else if (method === 'DELETE') response = await handleDeleteBlogPost(request, env, postId);
+                        else if (method === 'PUT') response = await handleUpdateBlogPost(request, env, postId); // 用户编辑自己的，或管理员编辑
+                        else if (method === 'DELETE') response = await handleDeleteBlogPost(request, env, postId); // 用户删除自己的，或管理员删除
                     }
                 }
             }
