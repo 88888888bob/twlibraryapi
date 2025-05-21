@@ -98,84 +98,110 @@ export async function handleAdminCreateUser(request, env) {
 export async function handleAdminUpdateUser(request, env, userId) {
     const adminVerification = await verifyAdmin(request, env);
     if (!adminVerification.authorized) return createErrorResponse(adminVerification.error, 401);
-    if (!userId) return createErrorResponse("User ID required.", 400);
-    try {
-       console.log(`[handleAdminUpdateUser] Attempting to update user ID: ${numericUserId}`);
+    if (!userId) {
+        return createErrorResponse("User ID (from path) is required.", 400);
+    }
+    
+    // 声明并初始化 numericUserId
+    const numericUserId = parseInt(userId); 
+    if (isNaN(numericUserId)) {
+        return createErrorResponse("Invalid User ID format in path. Must be a number.", 400);
+    }
 
-        const userExists = await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(numericUserId).first();
-        console.log(`[handleAdminUpdateUser] Initial check for user ${numericUserId}:`, JSON.stringify(userExists));
+    try {
+        console.log(`[handleAdminUpdateUser] Attempting to update user with ID (parsed): ${numericUserId}`);
+
+        const userExists = await env.DB.prepare(
+            "SELECT id FROM users WHERE id = ?"
+        ).bind(numericUserId).first(); // 使用 numericUserId
+
+        console.log(`[handleAdminUpdateUser] Check if user ${numericUserId} exists:`, JSON.stringify(userExists));
 
         if (!userExists) {
             console.warn(`[handleAdminUpdateUser] User ${numericUserId} not found during initial check.`);
             return createErrorResponse("User not found.", 404);
         }
 
+        // ... (获取 request.json(), 构建 updateFields 和 params)
+        // 在所有使用用户 ID 进行数据库操作的地方，都使用 numericUserId
+        // 例如：
+        // if (email) {
+        //    const emailCheck = await env.DB.prepare(...).bind(email, numericUserId).first();
+        //    ...
+        // }
+        // params.push(numericUserId); // For the WHERE clause
+        // ...
+
         const { username, email, role, newPassword } = await request.json();
         const updateFields = [];
-        const params = [];
+        const paramsToBind = []; // 使用一个新的数组来收集绑定参数
 
-        if (username) { updateFields.push("username = ?"); params.push(username); }
-        if (email) {
+        if (username !== undefined) { updateFields.push("username = ?"); paramsToBind.push(username); }
+        if (email !== undefined) {
             if (!email.includes('@')) return createErrorResponse('Invalid email format.', 400);
-            const { results: emailCheck } = await env.DB.prepare("SELECT id FROM users WHERE email = ? AND id != ?").bind(email, userId).first();
-            if (emailCheck) return createErrorResponse('Email already in use.', 409);
-            updateFields.push("email = ?"); params.push(email);
+            const emailCheck = await env.DB.prepare("SELECT id FROM users WHERE email = ? AND id != ?").bind(email, numericUserId).first();
+            if (emailCheck) return createErrorResponse('Email already in use by another account.', 409);
+            updateFields.push("email = ?"); paramsToBind.push(email);
         }
-        if (role) {
-            if (!['student', 'teacher', 'admin'].includes(role)) return createErrorResponse("Invalid role.", 400);
-            updateFields.push("role = ?"); params.push(role);
+        if (role !== undefined) {
+            if (!['student', 'teacher', 'admin'].includes(role)) return createErrorResponse("Invalid role specified.", 400);
+            updateFields.push("role = ?"); paramsToBind.push(role);
         }
-        if (newPassword) {
+        if (newPassword !== undefined && newPassword.trim() !== '') {
             const hashedPassword = await bcrypt.hash(newPassword, 10);
-            updateFields.push("password = ?"); params.push(hashedPassword);
+            updateFields.push("password = ?"); paramsToBind.push(hashedPassword);
         }
 
-        if (updateFields.length === 0) return createErrorResponse("No fields to update.", 400);
-        params.push(userId);
+        if (updateFields.length === 0) {
+            return createErrorResponse("No fields provided to update.", 400);
+        }
+        
+        // 添加 updated_at (如果你的表有这个字段且希望自动更新)
+        // updateFields.push("updated_at = STRFTIME('%Y-%m-%d %H:%M:%S', 'now', 'localtime')");
+        // 不需要为 updated_at 添加到 paramsToBind，因为它在 SQL 中直接计算
 
-        const query = `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`;
+        paramsToBind.push(numericUserId); // 最后添加 WHERE id = ? 的参数
+
+        const updateQuery = `UPDATE users SET ${updateFields.join(", ")} WHERE id = ?`;
         console.log(`[handleAdminUpdateUser] Update query for user ${numericUserId}: ${updateQuery}`);
-        console.log(`[handleAdminUpdateUser] Update params for user ${numericUserId}:`, JSON.stringify(params));
-        const { success, meta } = await env.DB.prepare(updateQuery).bind(...params).run();
+        console.log(`[handleAdminUpdateUser] Update params for user ${numericUserId}:`, JSON.stringify(paramsToBind));
+
+        const { success, meta } = await env.DB.prepare(updateQuery).bind(...paramsToBind).run();
         console.log(`[handleAdminUpdateUser] Update result for user ${numericUserId}: success=${success}, meta=`, JSON.stringify(meta));
 
         if (success && meta.changes > 0) {
-            const updatedUser = await env.DB.prepare("SELECT id, username, email, role, created_at FROM users WHERE id = ?").bind(numericUserId).first();
+            const updatedUser = await env.DB.prepare(
+                "SELECT id, username, email, role, created_at FROM users WHERE id = ?"
+            ).bind(numericUserId).first();
+            
             console.log(`[handleAdminUpdateUser] Refetched user ${numericUserId} after update:`, JSON.stringify(updatedUser));
+            if (!updatedUser) {
+                 console.error(`[handleAdminUpdateUser] CRITICAL: User ${numericUserId} updated but could not be refetched!`);
+                 return createErrorResponse('User data updated, but failed to retrieve the updated record.', 500);
+            }
+            return new Response(JSON.stringify({ success: true, message: 'User updated successfully.', user: updatedUser }), { status: 200 });
         } else if (meta.changes === 0) {
-            return createErrorResponse('No changes made to user.', 304);
-        } else {
-            return createErrorResponse('Failed to update user.', 500);
+            // This could mean the data sent was identical to existing data, or user not found (though checked earlier)
+            console.warn(`[handleAdminUpdateUser] No rows affected for user ${numericUserId}. Data might be identical or issue with query.`);
+            // To be more precise, you could re-fetch and compare to see if it was due to identical data.
+            // For now, assume it means no effective change.
+            const currentUserState = await env.DB.prepare("SELECT id, username, email, role, created_at FROM users WHERE id = ?").bind(numericUserId).first();
+            return new Response(JSON.stringify({ success: true, message: 'No changes applied to user.', user: currentUserState }), { status: 200 });
+
+        } else { // success is false or meta.changes is negative (error)
+            console.error(`[handleAdminUpdateUser] D1 UPDATE failed for user ${numericUserId} despite success=${success}, meta=`, JSON.stringify(meta));
+            return createErrorResponse('Failed to update user due to a database error.', 500);
         }
+
     } catch (error) {
-        console.error('Admin Update User Error:', error);
-        if (error.message?.includes('UNIQUE constraint failed')) return createErrorResponse('Update failed (unique constraint).', 409);
-        return createErrorResponse('Server Error: ' + error.message, 500);
-    }
-}
-
-export async function handleAdminDeleteUser(request, env, userId) {
-    const adminVerification = await verifyAdmin(request, env);
-    if (!adminVerification.authorized) return createErrorResponse(adminVerification.error, 401);
-    if (!userId) return createErrorResponse("User ID required.", 400);
-    try {
-        const { results: userExists } = await env.DB.prepare("SELECT id FROM users WHERE id = ?").bind(userId).first();
-        if (!userExists) return createErrorResponse("User not found.", 404);
-
-        const { results: borrowedBooks } = await env.DB.prepare("SELECT COUNT(*) AS count FROM borrowed_books WHERE user_id = ? AND returned = 0").bind(userId).first();
-        if (borrowedBooks?.count > 0) return createErrorResponse(`User has ${borrowedBooks.count} unreturned books.`, 409);
-        
-        // Consider cascading deletes or soft deletes based on your DB schema and business rules
-        await env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId).run(); // Delete sessions first
-        const { success, meta } = await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(userId).run();
-
-        if (success && meta.changes > 0) {
-            return new Response(JSON.stringify({ success: true, message: 'User deleted.' }), { status: 200 });
-        } else {
-            return createErrorResponse('Failed to delete user (no rows affected).', 404);
+        console.error(`Admin Update User Error (ID: ${userId}):`, error.message, error.stack); // Log original userId for context
+        if (error instanceof SyntaxError && error.message.includes("JSON")) {
+            return createErrorResponse("Invalid request body: Malformed JSON.", 400);
         }
-    } catch (error) {
-        console.error('Admin Delete User Error:', error);
-        return createErrorResponse('Server Error: ' + error.message, 500);
+        if (error.message && error.message.includes("UNIQUE constraint failed")) {
+            return createErrorResponse('Update failed: A unique field (like email or username if unique) already exists for another user.', 409);
+        }
+        // Send back the actual error message if it's a ReferenceError for numericUserId
+        return createErrorResponse(`Server Error: ${error.message}`, 500);
     }
 }
