@@ -33,12 +33,33 @@ export async function handleAdminGetUsers(request, env) {
 export async function handleAdminGetUserById(request, env, userId) {
     const adminVerification = await verifyAdmin(request, env);
     if (!adminVerification.authorized) return createErrorResponse(adminVerification.error, 401);
-    if (!userId) return createErrorResponse("User ID required.", 400);
+    // 确保 userId 是正确的类型，D1 通常期望绑定的值与列类型匹配
+    // 如果 id 列是 INTEGER，而 userId 是字符串 "3"，D1 通常能处理，但显式转换更安全
+    const numericUserId = parseInt(userId);
+    if (isNaN(numericUserId)) {
+        return createErrorResponse("Invalid User ID format. Must be a number.", 400);
+    }
+
     try {
-        const { results } = await env.DB.prepare("SELECT id, username, email, role, created_at FROM users WHERE id = ?")
-            .bind(userId).first(); // .first() is better if expecting one or none
-        if (!results) return createErrorResponse("User not found.", 404);
-        return new Response(JSON.stringify({ success: true, user: results }), { status: 200 });
+        console.log(`[handleAdminGetUserById] Fetching user with ID: ${numericUserId}`); // 添加日志
+
+        const user = await env.DB.prepare(
+            "SELECT id, username, email, role, created_at FROM users WHERE id = ?"
+        ).bind(numericUserId).first(); // 使用 .first() 并绑定转换后的 numericUserId
+
+        console.log(`[handleAdminGetUserById] DB result for ID ${numericUserId}:`, JSON.stringify(user)); // 添加日志
+
+        if (!user) { // .first() 在找不到时返回 null
+            console.log(`[handleAdminGetUserById] User with ID ${numericUserId} not found in DB.`); // 添加日志
+            return createErrorResponse("User not found.", 404);
+        }
+        
+        // 用户已找到，user 是包含用户数据的对象
+        return new Response(JSON.stringify({ success: true, user: user }), { 
+            status: 200, 
+            headers: { 'Content-Type': 'application/json' } 
+        });
+
     } catch (error) {
         console.error("Admin Get User By ID Error:", error);
         return createErrorResponse("Server Error: " + error.message, 500);
