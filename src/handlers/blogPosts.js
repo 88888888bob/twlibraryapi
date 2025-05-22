@@ -238,16 +238,17 @@ export async function handleGetBlogPosts(request, env) {
         const dataSql = `
             SELECT 
                 p.id, p.title, p.slug, p.excerpt, p.status, p.is_featured,
-                p.user_id, p.username as post_author_username_on_post_table, /* username stored on post */
+                p.user_id, p.username as post_author_username_on_post_table,
                 p.book_isbn, p.book_title, 
                 p.featured_image_url, p.view_count, p.like_count, p.comment_count,
-                STRFTIME('%Y-%m-%d', p.published_at) as published_date,
-                STRFTIME('%Y-%m-%d %H:%M', p.updated_at) as updated_at_formatted,
-                u.username as author_actual_username /* username from users table */
+                STRFTIME('%Y-%m-%d', p.published_at) as published_date, /* 发表日期 */
+                STRFTIME('%Y-%m-%d %H:%M', p.created_at) as created_at_formatted, /* 创建日期，如果需要 */
+                STRFTIME('%Y-%m-%d %H:%M', p.updated_at) as updated_at_formatted, /* 最后修改日期 */
+                u.username as author_actual_username
             FROM blog_posts p
             ${joins} 
             ${whereClause} 
-            GROUP BY p.id /* Crucial for when joins (like with bpt) might create duplicate post rows */
+            GROUP BY p.id
             ORDER BY p.is_featured DESC, p.updated_at DESC, p.id DESC
             LIMIT ? OFFSET ?`;
         
