@@ -1,7 +1,7 @@
 // src/handlers/books.js
 import { createErrorResponse } from '../utils/responseHelper.js';
 import { verifyAdmin, verifyUser } from '../utils/authHelper.js';
-import { getPaginationParams, formatPaginatedResponse } from '../utils/paginationHelper.js';
+import { getPaginationParams, formatPaginatedResponse } from '../utils/paginationHelper.js'; // <--- 引入分页
 
 // --- 内部图书数据库操作辅助函数 ---
 async function getBookByISBNInternal(env, isbn) {
@@ -177,28 +177,60 @@ export async function handleDeleteBook(request, env) {
 }
 
 export async function handleSearchBook(request, env) {
-    const userVerification = await verifyUser(request, env); // 登录即可搜索
-    if (!userVerification.authorized) return createErrorResponse(userVerification.error, 401);
+    // 权限：可以设计为登录用户即可搜索，或仅管理员，根据你的需求
+    const userVerification = await verifyUser(request, env);
+    if (!userVerification.authorized) {
+        return createErrorResponse(userVerification.error, 401);
+    }
+    console.log("[handleSearchBook] Request received.");
+
     try {
+        const { page, limit, offset } = getPaginationParams(request.url, 15); // 默认每页 15 本书
         const url = new URL(request.url);
-        const params = [];
-        let query = "SELECT b.*, c.name as category_name FROM books b LEFT JOIN categories c ON b.category_id = c.id WHERE 1=1";
+        
+        let conditions = [];
+        let queryParams = [];
+        let joins = `LEFT JOIN categories c ON b.category_id = c.id`; // 保持 JOIN 以获取分类名
 
-        if (url.searchParams.get('isbn')) { query += " AND b.isbn = ?"; params.push(url.searchParams.get('isbn')); }
-        if (url.searchParams.get('title')) { query += " AND b.title LIKE ?"; params.push(`%${url.searchParams.get('title')}%`); }
-        if (url.searchParams.get('author')) { query += " AND b.author LIKE ?"; params.push(`%${url.searchParams.get('author')}%`); }
-        if (url.searchParams.get('category_id')) { query += " AND b.category_id = ?"; params.push(parseInt(url.searchParams.get('category_id'))); }
-        if (url.searchParams.get('status')) { query += " AND b.status = ?"; params.push(url.searchParams.get('status')); }
-        // 可以添加排序和分页
-        query += " ORDER BY b.title ASC";
+        // 筛选条件
+        if (url.searchParams.get('isbn')) { conditions.push("b.isbn = ?"); queryParams.push(url.searchParams.get('isbn')); }
+        if (url.searchParams.get('title')) { conditions.push("b.title LIKE ?"); queryParams.push(`%${url.searchParams.get('title')}%`); }
+        if (url.searchParams.get('author')) { conditions.push("b.author LIKE ?"); queryParams.push(`%${url.searchParams.get('author')}%`); }
+        if (url.searchParams.get('category_id')) { conditions.push("b.category_id = ?"); queryParams.push(parseInt(url.searchParams.get('category_id'))); }
+        if (url.searchParams.get('status')) { conditions.push("b.status = ?"); queryParams.push(url.searchParams.get('status')); }
 
-        const { results } = await env.DB.prepare(query).bind(...params).all();
-        return new Response(JSON.stringify({ success: true, results: results || [] }), { status: 200 });
+        const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+        // 获取总数
+        const countSql = `SELECT COUNT(DISTINCT b.isbn) as total FROM books b ${joins} ${whereClause}`;
+        console.log("[handleSearchBook] Count SQL:", countSql, "Params:", JSON.stringify(queryParams));
+        const countResult = await env.DB.prepare(countSql).bind(...queryParams).first();
+        const totalItems = countResult ? countResult.total : 0;
+        console.log("[handleSearchBook] Total items found:", totalItems);
+
+        // 获取数据
+        const dataSql = `
+            SELECT b.*, c.name as category_name 
+            FROM books b 
+            ${joins} 
+            ${whereClause} 
+            ORDER BY b.title ASC 
+            LIMIT ? OFFSET ?`;
+        const dataQueryParams = [...queryParams, limit, offset];
+        console.log("[handleSearchBook] Data SQL:", dataSql, "Params:", JSON.stringify(dataQueryParams));
+        const { results: books } = await env.DB.prepare(dataSql).bind(...dataQueryParams).all();
+        
+        console.log(`[handleSearchBook] Found ${books ? books.length : 0} books for current page.`);
+        return new Response(JSON.stringify(formatPaginatedResponse(books, totalItems, page, limit)), { 
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        });
     } catch (error) {
-        console.error("Search Book API Error:", error);
-        return createErrorResponse("Server Error: " + error.message, 500);
+        console.error("[handleSearchBook] API Error:", error.message, error.stack);
+        return createErrorResponse("Server Error while searching books: " + error.message, 500);
     }
 }
+
 
 export async function handleBorrowBook(request, env) {
     const adminVerification = await verifyAdmin(request, env); // 假设只有管理员操作

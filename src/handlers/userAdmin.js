@@ -5,30 +5,51 @@ import { verifyAdmin } from '../utils/authHelper.js';
 
 export async function handleAdminGetUsers(request, env) {
     const adminVerification = await verifyAdmin(request, env);
-    if (!adminVerification.authorized) return createErrorResponse(adminVerification.error, 401);
+    if (!adminVerification.authorized) {
+        return createErrorResponse(adminVerification.error, adminVerification.error.startsWith('Unauthorized') ? 401 : 403);
+    }
+    console.log("[handleAdminGetUsers] Request received.");
+
     try {
+        const { page, limit, offset } = getPaginationParams(request.url, 15); // 默认每页 15 用户
         const url = new URL(request.url);
-        const params = [];
-        let query = "SELECT id, username, email, role, created_at FROM users WHERE 1=1";
+        
+        let conditions = [];
+        let queryParams = [];
 
         if (url.searchParams.get('search')) {
-            query += " AND (username LIKE ? OR email LIKE ?)";
-            params.push(`%${url.searchParams.get('search')}%`, `%${url.searchParams.get('search')}%`);
+            conditions.push("(username LIKE ? OR email LIKE ?)");
+            queryParams.push(`%${url.searchParams.get('search')}%`, `%${url.searchParams.get('search')}%`);
         }
         if (url.searchParams.get('role')) {
-            query += " AND role = ?";
-            params.push(url.searchParams.get('role'));
+            conditions.push("role = ?");
+            queryParams.push(url.searchParams.get('role'));
         }
-        query += " ORDER BY created_at DESC";
-        // Add pagination if needed
+        
+        const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-        const { results } = await env.DB.prepare(query).bind(...params).all();
-        return new Response(JSON.stringify({ success: true, users: results || [] }), { status: 200 });
+        const countSql = `SELECT COUNT(*) as total FROM users ${whereClause}`;
+        console.log("[handleAdminGetUsers] Count SQL:", countSql, "Params:", JSON.stringify(queryParams));
+        const countResult = await env.DB.prepare(countSql).bind(...queryParams).first();
+        const totalItems = countResult ? countResult.total : 0;
+        console.log("[handleAdminGetUsers] Total items found:", totalItems);
+
+        const dataSql = `SELECT id, username, email, role, created_at FROM users ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+        const dataQueryParams = [...queryParams, limit, offset];
+        console.log("[handleAdminGetUsers] Data SQL:", dataSql, "Params:", JSON.stringify(dataQueryParams));
+        const { results: users } = await env.DB.prepare(dataSql).bind(...dataQueryParams).all();
+        
+        console.log(`[handleAdminGetUsers] Found ${users ? users.length : 0} users for current page.`);
+        return new Response(JSON.stringify(formatPaginatedResponse(users, totalItems, page, limit)), { 
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        });
     } catch (error) {
-        console.error("Admin Get Users Error:", error);
-        return createErrorResponse("Server Error: " + error.message, 500);
+        console.error("[handleAdminGetUsers] Error:", error.message, error.stack);
+        return createErrorResponse("Server Error fetching users: " + error.message, 500);
     }
 }
+
 
 export async function handleAdminGetUserById(request, env, userId) {
     const adminVerification = await verifyAdmin(request, env);

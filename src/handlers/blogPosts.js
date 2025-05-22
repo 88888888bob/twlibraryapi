@@ -39,13 +39,20 @@ async function getPostAndVerifyAccess(env, postId, userId, userRole, allowAdminO
     return { post, error: null };
 }
 
-// Helper to get topics for a post
+// 假设 getPostTopics 辅助函数在此文件或可导入
 async function getPostTopics(env, postId) {
-    const { results } = await env.DB.prepare(
-        "SELECT t.id, t.name, t.slug FROM blog_topics t JOIN blog_post_topics bpt ON t.id = bpt.topic_id WHERE bpt.post_id = ?"
-    ).bind(postId).all();
-    return results || [];
+    if (!postId) return [];
+    try {
+        const { results } = await env.DB.prepare(
+            "SELECT t.id, t.name, t.slug FROM blog_topics t JOIN blog_post_topics bpt ON t.id = bpt.topic_id WHERE bpt.post_id = ?"
+        ).bind(postId).all();
+        return results || [];
+    } catch (e) {
+        console.error(`Error fetching topics for post ${postId}:`, e);
+        return [];
+    }
 }
+
 
 
 export async function handleCreateBlogPost(request, env) {
@@ -144,85 +151,101 @@ export async function handleCreateBlogPost(request, env) {
 export async function handleGetBlogPosts(request, env) {
     console.log("[handleGetBlogPosts] Received request to list blog posts.");
     try {
-        // 获取分页参数，管理员视图下可能需要更大的默认 limit 以便前端缓存和筛选
-        // 但为了 API 的一致性，我们让前端请求时指定大的 limit
-        const { page, limit, offset } = getPaginationParams(request.url, 10); // 默认每页 10 条
         const url = new URL(request.url);
+        // 管理员视图下，前端可能会请求较大的 limit 以便进行客户端筛选，
+        // 但 API 本身还是应该有合理的默认 limit 和最大 limit。
+        const defaultLimit = url.searchParams.get('admin_view') === 'true' ? 200 : 10; // 管理员默认获取更多
+        const maxLimit = 500; // API 允许的最大 limit
         
-        let conditions = []; // SQL WHERE 条件数组
-        let queryParams = []; // SQL 绑定参数数组
-        let joins = `LEFT JOIN users u ON p.user_id = u.id`; // 基础 JOIN
+        let requestedLimit = parseInt(url.searchParams.get('limit')) || defaultLimit;
+        if (requestedLimit > maxLimit) {
+            console.warn(`[handleGetBlogPosts] Requested limit ${requestedLimit} exceeds max limit ${maxLimit}. Capping to max.`);
+            requestedLimit = maxLimit;
+        }
+        
+        const page = parseInt(url.searchParams.get('page')) || 1;
+        const offset = (page > 0 ? page - 1 : 0) * requestedLimit;
+        
+        let conditions = [];
+        let queryParams = [];
+        // 基础 JOIN，用于获取作者的实际用户名
+        let joins = `LEFT JOIN users u ON p.user_id = u.id`; 
         let isAdminContext = false;
 
-        // 检查是否为管理员视图，并验证权限
+        // 检查是否为管理员视图
         if (url.searchParams.get('admin_view') === 'true') {
-            console.log("[handleGetBlogPosts] Admin view requested.");
+            console.log("[handleGetBlogPosts] Admin view context requested.");
             const adminVerification = await verifyAdmin(request, env);
             if (!adminVerification.authorized) {
-                console.warn("[handleGetBlogPosts] Admin view denied due to lack of authorization.");
+                console.warn("[handleGetBlogPosts] Admin view denied: Not authorized.");
                 return createErrorResponse("Admin view requested but not authorized.", 403);
             }
             isAdminContext = true;
             console.log("[handleGetBlogPosts] Admin context verified.");
         }
 
-        // 处理状态筛选
+        // 状态筛选
         const statusFilter = url.searchParams.get('status');
         if (statusFilter) {
             console.log(`[handleGetBlogPosts] Filtering by status: "${statusFilter}"`);
-            if (isAdminContext || statusFilter === 'published') { // 管理员可查任何状态，普通用户只能查 published（如果 API 设计如此）
+            if (isAdminContext || statusFilter === 'published') {
                 conditions.push("p.status = ?");
                 queryParams.push(statusFilter);
             } else {
                 console.warn(`[handleGetBlogPosts] User attempted to filter by status "${statusFilter}" without admin rights.`);
-                 return createErrorResponse("Forbidden: You cannot filter by this status without admin rights.", 403);
+                return createErrorResponse("Forbidden: You cannot filter by this status without admin rights.", 403);
             }
         } else if (!isAdminContext) {
-            // 非管理员访问，且没有提供 status，默认只显示公开和已发布的
+            // 非管理员，默认只看公开和已发布的
             console.log("[handleGetBlogPosts] Public view, defaulting to published and public posts.");
             conditions.push("p.status = 'published'");
             conditions.push("p.visibility = 'public'");
         }
-        // 如果是管理员视图且没有 statusFilter，则不添加任何状态条件，获取所有状态的文章
+        // 管理员且无 statusFilter 时，获取所有状态
 
-        // 处理话题筛选
+        // 话题筛选
         const topicIdStr = url.searchParams.get('topic_id');
         if (topicIdStr && /^\d+$/.test(topicIdStr)) {
             const topicId = parseInt(topicIdStr);
             console.log(`[handleGetBlogPosts] Filtering by topic_id: ${topicId}`);
-            joins += ` JOIN blog_post_topics bpt ON p.id = bpt.post_id`; // 需要 JOIN 来按话题筛选
+            joins += ` JOIN blog_post_topics bpt ON p.id = bpt.post_id`;
             conditions.push("bpt.topic_id = ?");
             queryParams.push(topicId);
         }
         
-        // 处理关联书籍筛选
-        const bookIsbn = url.searchParams.get('book_isbn');
-        if (bookIsbn) {
-            console.log(`[handleGetBlogPosts] Filtering by book_isbn: "${bookIsbn}"`);
+        // 关联书籍筛选 (ISBN)
+        const bookIsbnFilter = url.searchParams.get('book_isbn');
+        if (bookIsbnFilter) {
+            console.log(`[handleGetBlogPosts] Filtering by book_isbn: "${bookIsbnFilter}"`);
             conditions.push("p.book_isbn = ?");
-            queryParams.push(bookIsbn);
+            queryParams.push(bookIsbnFilter);
         }
         
-        // 处理作者筛选 (通常仅管理员可用)
-        const userIdStr = url.searchParams.get('user_id');
-        if (userIdStr && /^\d+$/.test(userIdStr)) {
-            if (isAdminContext) { // 只有管理员可以按任意 user_id 筛选
-                console.log(`[handleGetBlogPosts] Admin filtering by user_id: ${userIdStr}`);
-                conditions.push("p.user_id = ?");
-                queryParams.push(parseInt(userIdStr));
-            } else {
-                console.warn(`[handleGetBlogPosts] Non-admin attempted to filter by user_id: ${userIdStr}`);
-                // 可以选择忽略此筛选，或返回错误
-            }
+        // 作者筛选 (user_id) - 通常管理员使用
+        const authorIdFilter = url.searchParams.get('user_id');
+        if (authorIdFilter && /^\d+$/.test(authorIdFilter) && isAdminContext) {
+            console.log(`[handleGetBlogPosts] Admin filtering by author user_id: ${authorIdFilter}`);
+            conditions.push("p.user_id = ?");
+            queryParams.push(parseInt(authorIdFilter));
         }
 
-        // 处理搜索词筛选
+        // 统一搜索 (博客标题，作者用户名，关联书籍的 ISBN)
         const searchTerm = url.searchParams.get('search');
-        if (searchTerm) {
-            console.log(`[handleGetBlogPosts] Filtering by search term: "${searchTerm}"`);
-            conditions.push("(p.title LIKE ? OR p.excerpt LIKE ? OR p.content LIKE ?)");
-            const searchLike = `%${searchTerm}%`;
-            queryParams.push(searchLike, searchLike, searchLike);
+        if (searchTerm && searchTerm.trim() !== '') {
+            const trimmedSearchTerm = searchTerm.trim();
+            console.log(`[handleGetBlogPosts] Searching for term: "${trimmedSearchTerm}"`);
+            let searchConditions = [];
+            let searchParamsLocal = [];
+            const searchLike = `%${trimmedSearchTerm}%`;
+
+            searchConditions.push("p.title LIKE ?"); searchParamsLocal.push(searchLike);
+            searchConditions.push("u.username LIKE ?"); searchParamsLocal.push(searchLike); // 搜索作者用户名 (来自 users 表)
+            searchConditions.push("p.username LIKE ?"); searchParamsLocal.push(searchLike); // 搜索文章表中冗余的作者名
+            if (/^\d+$/.test(trimmedSearchTerm) || trimmedSearchTerm.includes('-')) { // 简单判断是否可能是 ISBN
+                 searchConditions.push("p.book_isbn LIKE ?"); searchParamsLocal.push(searchLike);
+            }
+            conditions.push(`(${searchConditions.join(" OR ")})`);
+            queryParams.push(...searchParamsLocal);
         }
         
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -231,19 +254,32 @@ export async function handleGetBlogPosts(request, env) {
         const countSql = `SELECT COUNT(DISTINCT p.id) as total FROM blog_posts p ${joins} ${whereClause}`;
         console.log("[handleGetBlogPosts] Executing Count SQL:", countSql, "Params:", JSON.stringify(queryParams));
         const countResult = await env.DB.prepare(countSql).bind(...queryParams).first();
-        const totalFilteredItems = countResult ? countResult.total : 0;
-        console.log("[handleGetBlogPosts] Total filtered items found by DB:", totalFilteredItems);
+        const totalItems = countResult ? countResult.total : 0;
+        console.log("[handleGetBlogPosts] Total filtered items found by DB:", totalItems);
 
-        // 2. 获取符合当前筛选条件的数据 (带分页)
+        // 2. 获取数据
+        // 内容预览参数 (仅限非管理员视图且明确请求时)
+        const previewLengthStr = url.searchParams.get('preview_length');
+        let contentSelection = "p.content"; 
+        let contentAlias = "content";
+        if (!isAdminContext && previewLengthStr && /^\d+$/.test(previewLengthStr)) {
+            const previewLength = Math.min(Math.max(parseInt(previewLengthStr), 30), 300); // 限制预览长度 30-300
+            console.log(`[handleGetBlogPosts] Content preview requested with length: ${previewLength}`);
+            contentSelection = `CASE WHEN LENGTH(p.content) > ${previewLength} THEN SUBSTR(p.content, 1, ${previewLength}) || '...' ELSE p.content END`;
+            contentAlias = "content_preview"; // 返回的字段名是 content_preview
+        }
+        
         const dataSql = `
             SELECT 
-                p.id, p.title, p.slug, p.excerpt, p.status, p.is_featured,
+                p.id, p.title, p.slug, 
+                ${contentSelection} AS ${contentAlias}, /* content 或 content_preview */
+                p.excerpt, p.status, p.is_featured,
                 p.user_id, p.username as post_author_username_on_post_table,
                 p.book_isbn, p.book_title, 
                 p.featured_image_url, p.view_count, p.like_count, p.comment_count,
-                STRFTIME('%Y-%m-%d', p.published_at) as published_date, /* 发表日期 */
-                STRFTIME('%Y-%m-%d %H:%M', p.created_at) as created_at_formatted, /* 创建日期，如果需要 */
-                STRFTIME('%Y-%m-%d %H:%M', p.updated_at) as updated_at_formatted, /* 最后修改日期 */
+                STRFTIME('%Y-%m-%d', p.published_at) as published_date,
+                STRFTIME('%Y-%m-%d %H:%M', p.created_at) as created_at_formatted,
+                STRFTIME('%Y-%m-%d %H:%M', p.updated_at) as updated_at_formatted,
                 u.username as author_actual_username
             FROM blog_posts p
             ${joins} 
@@ -252,29 +288,31 @@ export async function handleGetBlogPosts(request, env) {
             ORDER BY p.is_featured DESC, p.updated_at DESC, p.id DESC
             LIMIT ? OFFSET ?`;
         
-        const dataQueryParams = [...queryParams, limit, offset];
+        const dataQueryParams = [...queryParams, requestedLimit, offset];
         console.log("[handleGetBlogPosts] Executing Data SQL:", dataSql, "Params:", JSON.stringify(dataQueryParams));
         const { results: postsData } = await env.DB.prepare(dataSql).bind(...dataQueryParams).all();
-        console.log(`[handleGetBlogPosts] Found ${postsData ? postsData.length : 0} posts for current page.`);
+        console.log(`[handleGetBlogPosts] Found ${postsData ? postsData.length : 0} posts for current page ${page}.`);
         
-        const postsWithTopics = [];
+        const postsProcessed = [];
         if (postsData) {
             for (const post of postsData) {
-                const topics = await getPostTopics(env, post.id); // 调用辅助函数获取话题
-                postsWithTopics.push({ 
+                const topics = await getPostTopics(env, post.id);
+                const finalContent = previewLengthStr && !isAdminContext ? post.content_preview : post.content; // 使用正确的字段名
+                postsProcessed.push({ 
                     ...post, 
-                    topics: topics || [], // 确保 topics 是数组
+                    content: finalContent, // 确保最终返回的字段是 content
+                    topics: topics || [],
                     author_username: post.author_actual_username || post.post_author_username_on_post_table || 'Unknown'
                 });
             }
         }
         
-        // 3. 获取所有状态的计数 (仅当是管理员上下文时)
         let statusCounts = null;
         if (isAdminContext) {
             console.log("[handleGetBlogPosts] Fetching status counts for admin view.");
+            // ... (statusCounts 查询逻辑，与之前版本一致)
             const countsQueries = [
-                env.DB.prepare("SELECT COUNT(*) as count FROM blog_posts"), // all (admin view)
+                env.DB.prepare("SELECT COUNT(*) as count FROM blog_posts"),
                 env.DB.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'published'"),
                 env.DB.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'draft'"),
                 env.DB.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'pending_review'"),
@@ -292,11 +330,10 @@ export async function handleGetBlogPosts(request, env) {
                 console.log("[handleGetBlogPosts] Status counts:", JSON.stringify(statusCounts));
             } catch (batchError) {
                 console.error("[handleGetBlogPosts] Error fetching status counts via batch:", batchError);
-                // 即使计数失败，也继续返回文章数据
             }
         }
         
-        const responsePayload = formatPaginatedResponse(postsWithTopics, totalFilteredItems, page, limit);
+        const responsePayload = formatPaginatedResponse(postsProcessed, totalItems, page, requestedLimit);
         if (statusCounts) {
             responsePayload.statusCounts = statusCounts;
         }
