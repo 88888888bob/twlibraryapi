@@ -2,51 +2,65 @@
 import * as bcrypt from 'bcryptjs';
 import { createErrorResponse } from '../utils/responseHelper.js';
 import { verifyAdmin } from '../utils/authHelper.js';
+import { getPaginationParams, formatPaginatedResponse } from '../utils/paginationHelper.js';
 
 export async function handleAdminGetUsers(request, env) {
     const adminVerification = await verifyAdmin(request, env);
     if (!adminVerification.authorized) {
         return createErrorResponse(adminVerification.error, adminVerification.error.startsWith('Unauthorized') ? 401 : 403);
     }
-    console.log("[handleAdminGetUsers] Request received.");
+    console.log("[HANDLER handleAdminGetUsers] Request received by backend."); // 后端日志
 
     try {
+        // 从 request.url 获取分页参数
+        // 这里的 request.url 是完整的 URL 字符串，例如 "https://twapi.bob666.eu.org/api/admin/users?page=1&limit=15"
         const { page, limit, offset } = getPaginationParams(request.url, 15); // 默认每页 15 用户
-        const url = new URL(request.url);
+        
+        const url = new URL(request.url); // 用于获取其他查询参数，如 search, role
         
         let conditions = [];
         let queryParams = [];
 
         if (url.searchParams.get('search')) {
+            const searchTerm = `%${url.searchParams.get('search')}%`;
             conditions.push("(username LIKE ? OR email LIKE ?)");
-            queryParams.push(`%${url.searchParams.get('search')}%`, `%${url.searchParams.get('search')}%`);
+            queryParams.push(searchTerm, searchTerm);
+            console.log(`[HANDLER handleAdminGetUsers] Search term: ${searchTerm}`);
         }
         if (url.searchParams.get('role')) {
+            const roleTerm = url.searchParams.get('role');
             conditions.push("role = ?");
-            queryParams.push(url.searchParams.get('role'));
+            queryParams.push(roleTerm);
+            console.log(`[HANDLER handleAdminGetUsers] Role term: ${roleTerm}`);
         }
         
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
+        // 1. 获取总数
         const countSql = `SELECT COUNT(*) as total FROM users ${whereClause}`;
-        console.log("[handleAdminGetUsers] Count SQL:", countSql, "Params:", JSON.stringify(queryParams));
+        console.log("[HANDLER handleAdminGetUsers] Count SQL:", countSql, "Params:", JSON.stringify(queryParams));
         const countResult = await env.DB.prepare(countSql).bind(...queryParams).first();
         const totalItems = countResult ? countResult.total : 0;
-        console.log("[handleAdminGetUsers] Total items found:", totalItems);
+        console.log("[HANDLER handleAdminGetUsers] Total items found by DB:", totalItems);
 
+        // 2. 获取数据
         const dataSql = `SELECT id, username, email, role, created_at FROM users ${whereClause} ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-        const dataQueryParams = [...queryParams, limit, offset];
-        console.log("[handleAdminGetUsers] Data SQL:", dataSql, "Params:", JSON.stringify(dataQueryParams));
+        const dataQueryParams = [...queryParams, limit, offset]; // 将 limit 和 offset 添加到参数列表的末尾
+        console.log("[HANDLER handleAdminGetUsers] Data SQL:", dataSql, "Params:", JSON.stringify(dataQueryParams));
         const { results: users } = await env.DB.prepare(dataSql).bind(...dataQueryParams).all();
         
-        console.log(`[handleAdminGetUsers] Found ${users ? users.length : 0} users for current page.`);
-        return new Response(JSON.stringify(formatPaginatedResponse(users, totalItems, page, limit)), { 
+        console.log(`[HANDLER handleAdminGetUsers] Found ${users ? users.length : 0} users for current page ${page}.`);
+        
+        // 使用 formatPaginatedResponse 工具函数来构建标准化的分页响应
+        return new Response(JSON.stringify(formatPaginatedResponse(users || [], totalItems, page, limit)), { 
             status: 200,
             headers: { 'Content-Type': 'application/json' }
         });
+
     } catch (error) {
-        console.error("[handleAdminGetUsers] Error:", error.message, error.stack);
-        return createErrorResponse("Server Error fetching users: " + error.message, 500);
+        console.error("[HANDLER handleAdminGetUsers] Error processing request:", error.message, error.stack);
+        // 返回具体的错误信息，而不是把 "getPaginationParams is not defined" 硬编码进去
+        return createErrorResponse(`Server Error fetching users: ${error.message}`, 500);
     }
 }
 
