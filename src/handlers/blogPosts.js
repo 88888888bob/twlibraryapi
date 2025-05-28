@@ -152,10 +152,8 @@ export async function handleGetBlogPosts(request, env) {
     console.log("[handleGetBlogPosts] Received request to list blog posts.");
     try {
         const url = new URL(request.url);
-        // 管理员视图下，前端可能会请求较大的 limit 以便进行客户端筛选，
-        // 但 API 本身还是应该有合理的默认 limit 和最大 limit。
-        const defaultLimit = url.searchParams.get('admin_view') === 'true' ? 200 : 10; // 管理员默认获取更多
-        const maxLimit = 500; // API 允许的最大 limit
+        const defaultLimit = url.searchParams.get('admin_view') === 'true' ? 200 : 10;
+        const maxLimit = 500; 
         
         let requestedLimit = parseInt(url.searchParams.get('limit')) || defaultLimit;
         if (requestedLimit > maxLimit) {
@@ -168,11 +166,9 @@ export async function handleGetBlogPosts(request, env) {
         
         let conditions = [];
         let queryParams = [];
-        // 基础 JOIN，用于获取作者的实际用户名
         let joins = `LEFT JOIN users u ON p.user_id = u.id`; 
         let isAdminContext = false;
 
-        // 检查是否为管理员视图
         if (url.searchParams.get('admin_view') === 'true') {
             console.log("[handleGetBlogPosts] Admin view context requested.");
             const adminVerification = await verifyAdmin(request, env);
@@ -184,7 +180,6 @@ export async function handleGetBlogPosts(request, env) {
             console.log("[handleGetBlogPosts] Admin context verified.");
         }
 
-        // 状态筛选
         const statusFilter = url.searchParams.get('status');
         if (statusFilter) {
             console.log(`[handleGetBlogPosts] Filtering by status: "${statusFilter}"`);
@@ -196,14 +191,11 @@ export async function handleGetBlogPosts(request, env) {
                 return createErrorResponse("Forbidden: You cannot filter by this status without admin rights.", 403);
             }
         } else if (!isAdminContext) {
-            // 非管理员，默认只看公开和已发布的
             console.log("[handleGetBlogPosts] Public view, defaulting to published and public posts.");
             conditions.push("p.status = 'published'");
             conditions.push("p.visibility = 'public'");
         }
-        // 管理员且无 statusFilter 时，获取所有状态
 
-        // 话题筛选
         const topicIdStr = url.searchParams.get('topic_id');
         if (topicIdStr && /^\d+$/.test(topicIdStr)) {
             const topicId = parseInt(topicIdStr);
@@ -213,7 +205,6 @@ export async function handleGetBlogPosts(request, env) {
             queryParams.push(topicId);
         }
         
-        // 关联书籍筛选 (ISBN)
         const bookIsbnFilter = url.searchParams.get('book_isbn');
         if (bookIsbnFilter) {
             console.log(`[handleGetBlogPosts] Filtering by book_isbn: "${bookIsbnFilter}"`);
@@ -221,7 +212,6 @@ export async function handleGetBlogPosts(request, env) {
             queryParams.push(bookIsbnFilter);
         }
         
-        // 作者筛选 (user_id) - 通常管理员使用
         const authorIdFilter = url.searchParams.get('user_id');
         if (authorIdFilter && /^\d+$/.test(authorIdFilter) && isAdminContext) {
             console.log(`[handleGetBlogPosts] Admin filtering by author user_id: ${authorIdFilter}`);
@@ -229,62 +219,77 @@ export async function handleGetBlogPosts(request, env) {
             queryParams.push(parseInt(authorIdFilter));
         }
 
-        // 统一搜索 (博客标题，作者用户名，关联书籍的 ISBN)
         const searchTerm = url.searchParams.get('search');
         if (searchTerm && searchTerm.trim() !== '') {
             const trimmedSearchTerm = searchTerm.trim();
             console.log(`[handleGetBlogPosts] Searching for term: "${trimmedSearchTerm}"`);
             let searchConditions = [];
-            let searchParamsLocal = [];
+            let searchParamsLocal = []; // 本地参数收集，用于 OR 条件组
             const searchLike = `%${trimmedSearchTerm}%`;
 
             searchConditions.push("p.title LIKE ?"); searchParamsLocal.push(searchLike);
-            searchConditions.push("u.username LIKE ?"); searchParamsLocal.push(searchLike); // 搜索作者用户名 (来自 users 表)
-            searchConditions.push("p.username LIKE ?"); searchParamsLocal.push(searchLike); // 搜索文章表中冗余的作者名
-            if (/^\d+$/.test(trimmedSearchTerm) || trimmedSearchTerm.includes('-')) { // 简单判断是否可能是 ISBN
+            searchConditions.push("u.username LIKE ?"); searchParamsLocal.push(searchLike); // 搜索 users 表中的作者用户名
+            searchConditions.push("p.username LIKE ?"); searchParamsLocal.push(searchLike); // 也搜索 posts 表中冗余的作者名
+
+            if (/^[\d-]+$/.test(trimmedSearchTerm)) { // 简单判断是否可能是 ISBN (数字和连字符)
                  searchConditions.push("p.book_isbn LIKE ?"); searchParamsLocal.push(searchLike);
             }
+            // 你也可以在这里添加搜索 post.content 的条件，但这可能较慢，需要全文搜索支持
+            // searchConditions.push("p.content LIKE ?"); searchParamsLocal.push(searchLike);
+            
             conditions.push(`(${searchConditions.join(" OR ")})`);
-            queryParams.push(...searchParamsLocal);
+            queryParams.push(...searchParamsLocal); // 将本地参数展开添加到主查询参数中
         }
         
         const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-        // 1. 获取符合当前筛选条件的总条目数 (用于分页)
         const countSql = `SELECT COUNT(DISTINCT p.id) as total FROM blog_posts p ${joins} ${whereClause}`;
         console.log("[handleGetBlogPosts] Executing Count SQL:", countSql, "Params:", JSON.stringify(queryParams));
         const countResult = await env.DB.prepare(countSql).bind(...queryParams).first();
         const totalItems = countResult ? countResult.total : 0;
         console.log("[handleGetBlogPosts] Total filtered items found by DB:", totalItems);
 
-        // 2. 获取数据
-        // 内容预览参数 (仅限非管理员视图且明确请求时)
+        // --- 新增：内容预览参数处理 ---
         const previewLengthStr = url.searchParams.get('preview_length');
         let contentSelection = "p.content"; 
-        let contentAlias = "content";
+        let contentAlias = "content"; // 默认返回的字段名是 content
+
+        // 只有在非管理员上下文且提供了有效的 preview_length 时才截取
         if (!isAdminContext && previewLengthStr && /^\d+$/.test(previewLengthStr)) {
-            const previewLength = Math.min(Math.max(parseInt(previewLengthStr), 30), 300); // 限制预览长度 30-300
+            const previewLength = Math.min(Math.max(parseInt(previewLengthStr), 30), 500); // 限制预览长度 30-500 字符
             console.log(`[handleGetBlogPosts] Content preview requested with length: ${previewLength}`);
-            contentSelection = `CASE WHEN LENGTH(p.content) > ${previewLength} THEN SUBSTR(p.content, 1, ${previewLength}) || '...' ELSE p.content END`;
-            contentAlias = "content_preview"; // 返回的字段名是 content_preview
+            // 使用 SUBSTR 和 LENGTH (SQLite 函数)
+            // CASE WHEN LENGTH(column) > X THEN SUBSTR(column, 1, X) || '...' ELSE column END
+            contentSelection = `CASE 
+                                    WHEN LENGTH(REPLACE(REPLACE(p.content, CHAR(10), ''), CHAR(13), '')) > ${previewLength} 
+                                    THEN SUBSTR(REPLACE(REPLACE(p.content, CHAR(10), ''), CHAR(13), ''), 1, ${previewLength}) || '...' 
+                                    ELSE REPLACE(REPLACE(p.content, CHAR(10), ''), CHAR(13), '') 
+                                END`;
+            // 注意：上面的 SUBSTR 可能截断 HTML 标签。更安全的做法是后端提取纯文本再截取，但这会更复杂。
+            // 为了简单起见，这里直接截取 HTML。前端需要能处理可能不完整的 HTML。
+            // 如果内容本身就是纯文本或 Markdown，则此方法较安全。
+            // 如果是富文本 HTML，更好的方式是在应用层处理（例如，先转纯文本再截取，或者使用库来安全截取 HTML）。
+            // 为了在 SQL 中简单处理，我们先替换掉换行符再计算长度和截取。
+            contentAlias = "content_preview"; // 返回的字段名将是 content_preview
         }
+        // --- 内容预览参数处理结束 ---
         
         const dataSql = `
             SELECT 
                 p.id, p.title, p.slug, 
-                ${contentSelection} AS ${contentAlias}, /* content 或 content_preview */
+                ${contentSelection} AS ${contentAlias}, /* 根据条件可能是 p.content 或 SUBSTR(...) */
                 p.excerpt, p.status, p.is_featured,
-                p.user_id, p.username as post_author_username_on_post_table,
+                p.user_id, p.username as post_author_username_on_post_table, /* posts 表中的作者名 */
                 p.book_isbn, p.book_title, 
                 p.featured_image_url, p.view_count, p.like_count, p.comment_count,
-                STRFTIME('%Y-%m-%d', p.published_at) as published_date,
+                STRFTIME('%Y-%m-%d', p.published_at) as published_date, /* 只取日期部分 */
                 STRFTIME('%Y-%m-%d %H:%M', p.created_at) as created_at_formatted,
                 STRFTIME('%Y-%m-%d %H:%M', p.updated_at) as updated_at_formatted,
-                u.username as author_actual_username
+                u.username as author_actual_username /* users 表中的作者名 */
             FROM blog_posts p
             ${joins} 
             ${whereClause} 
-            GROUP BY p.id
+            GROUP BY p.id /* 确保每个帖子只出现一次，尤其是在 JOIN 后 */
             ORDER BY p.is_featured DESC, p.updated_at DESC, p.id DESC
             LIMIT ? OFFSET ?`;
         
@@ -297,11 +302,15 @@ export async function handleGetBlogPosts(request, env) {
         if (postsData) {
             for (const post of postsData) {
                 const topics = await getPostTopics(env, post.id);
-                const finalContent = previewLengthStr && !isAdminContext ? post.content_preview : post.content; // 使用正确的字段名
+                // 如果请求了预览，则使用 content_preview 字段，否则使用 content 字段
+                // 并确保最终返回给前端的字段名统一为 'content'
+                const finalContent = (contentAlias === "content_preview") ? post.content_preview : post.content;
+
                 postsProcessed.push({ 
                     ...post, 
-                    content: finalContent, // 确保最终返回的字段是 content
+                    content: finalContent, // 确保返回的字段是 'content'
                     topics: topics || [],
+                    // 优先使用 users 表的用户名，其次是 posts 表的用户名
                     author_username: post.author_actual_username || post.post_author_username_on_post_table || 'Unknown'
                 });
             }
@@ -310,7 +319,6 @@ export async function handleGetBlogPosts(request, env) {
         let statusCounts = null;
         if (isAdminContext) {
             console.log("[handleGetBlogPosts] Fetching status counts for admin view.");
-            // ... (statusCounts 查询逻辑，与之前版本一致)
             const countsQueries = [
                 env.DB.prepare("SELECT COUNT(*) as count FROM blog_posts"),
                 env.DB.prepare("SELECT COUNT(*) as count FROM blog_posts WHERE status = 'published'"),
